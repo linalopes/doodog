@@ -9,7 +9,7 @@ doodog is the artistic project. doodog studio is the creative coding application
 Repository: [linalopes/doodog](https://github.com/linalopes/doodog)  
 Package identifier: `doodog`
 
-**Phase 02B · Kinematic preview.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. The result is labeled **Kinematic Preview — Not Physically Validated**. Physics and the physical robot are not in this phase.
+**Phase 03 · Parametric playground.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters in a sketch update the drawing and the kinematic pose together. The viewport stays labeled **Kinematic Preview — Not Physically Validated**. Physics and the physical robot are not in this phase.
 
 Concept, interaction design and development: [Lina Lopes](https://linalopes.info/)
 
@@ -23,7 +23,7 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 
 - Svelte 5, TypeScript, and Vite application shell.
 - Branded header, workspace tabs (Create, Simulate, Robot), and authorship footer. Personal authorship and institutional context are separate credits.
-- **Create:** sketch library stored in this browser, CodeMirror editor, Run and Stop, sandboxed p5.js preview, seven examples (six timed adaptations of the Plotter Workspace studies, plus *Two-brush Lissajous*), and a reserved parameter panel.
+- **Create:** sketch library stored in this browser, CodeMirror editor, Run and Stop, sandboxed p5.js preview, seven examples (six timed adaptations of the Plotter Workspace studies, plus *Two-brush Lissajous*), and parameter controls for a running sketch.
 - **Simulate:** the same timeline and the latest `MotionFrame`. Playback seeks, plays, pauses, and resets that clock. The 3D stage is empty. There is no placeholder robot and no fake motion.
 - **Robot:** overview, connection, and safety sections. Connect is disabled. There is no transport and no motion command.
 - Shared motion types (`BrushTarget`, `MotionFrame`) and a single timeline store. Adapter interfaces for a future simulation and a future Go2 controller exist as types only. Nothing implements them.
@@ -50,12 +50,21 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 - Three paths are drawn separately: the desired sheet path (dashed), the achieved tip path (turquoise), and geometric paint. Paint is drawn only when contact was requested, the brush is active, the target is reachable, and the tip is within 8 mm of the sheet. It is labeled a geometric preview, not simulated paint.
 - The Robot model section lists joint names, angles, limits, foot positions, the foot-sphere centre, brush tips, and the canvas → paper → world numbers. Joint sliders are a manual inspection pose. They do not follow the timeline until “Follow timeline”, and they do not address hardware.
 
+## Implemented in Phase 03
+
+- A running sketch may declare `const params = { amplitude: 120, brush: 'left' }`. The iframe reads that object after Run and describes a control for each number, boolean, or string. Optional `paramInfo` on the same keys sets `min`, `max`, `step`, `options`, and `label`. A sketch with no `params` still runs, and the panel stays empty.
+- The host does not evaluate sketch source to discover parameters. The sandbox reports the schema. Create and Simulate share that state. Changing a control sends `SET_PARAMS` into the live iframe, samples `motion(t)` at the current host time, and updates the drawing and the kinematic pose. The iframe is not reloaded and the Three.js scene is not rebuilt.
+- Editing the source is separate. Those edits stay in the editor until Run. Run starts from the values written in the source. A control change does not rewrite the editor.
+- A control change rebuilds the accumulated 2D and 3D traces from the new values, including after pause, seek, reset, or a loop. Slider moves are debounced (about 120 ms, and at least one update within 280 ms). Releasing a slider sends immediately. A backward seek replays up to 120 seconds, as before. If `scorePeriod()` changes, the host timeline uses the new length.
+- `motion(t)` should read `params` when it is called. A copy taken once at load time will not follow the panel.
+- Creative parameters stay separate from the robot. Amplitude, frequency, phase, spacing, brush choice, and contact pattern live on the sketch. Paper position and size, canvas mapping, brush mounts, lift height, and the reference pose stay in the robot model panel. A sketch that draws outside the sheet is reported as unreachable. The sheet is not resized to fit it.
+- The viewport reports current reachability, left and right tip error in millimetres, a joint-limit mark, and how many trail samples requested contact but were geometrically unreachable. Reachable does not mean dynamically safe.
+
 ## Not in this phase
 
 - MuJoCo, contact forces, friction, or balance. Kinematic reach is not physical stability.
 - Unitree SDK, network connection, or any command sent to a physical robot. The Robot workspace stays disabled.
 - Moving the body or solving the rear legs to extend the drawing reach.
-- Live parameter controls. The panel is a layout reservation; values are edited in the sketch.
 - SVG export, G-code, or any file handed from p5.js to the robot.
 - New drawing examples.
 
@@ -69,7 +78,7 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 - `draw()` is re-run from the beginning after a backward seek or a loop. A sketch whose paint depends on randomness or on input will not reconstruct the same trace.
 - `millis()` follows the host. p5’s `deltaTime` is not retimed. Sketches should read `millis() / 1000` or the `t` passed to `motion`.
 - A sketch with no `motion(t)` still draws. The readout says the simulation has nothing to follow. The robot then holds the reference pose. A bad return or a throw is reported the same way and does not stop the preview by itself.
-- The parameter panel does not push values into the running sketch.
+- Parameter controls accept numbers inside the declared range, booleans, listed choices, and text up to 80 characters. Other values are ignored. At most 24 controls are shown.
 - The default sheet is 0.20 m × 0.20 m, centred 0.30 m in front of the body. Some of the seven scores fall outside the front legs at that scale. That is reported as unreachable. The scores are not reshaped to fit.
 - Paint in the viewport is geometric proximity, not contact physics. A lifted move does not leave a mark.
 - The 3D trail keeps at most 6000 samples. A continuous score longer than that drops the oldest marks. A seek across more than 120 seconds still rebuilds only the latest 120 seconds of the drawing, and the trail follows that rebuild.
@@ -83,7 +92,7 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, and checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
+`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, and checks parameter inference. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
 
 Sketches persist in `localStorage` under the prefix `doodog`. Clearing site data removes them. Built-in examples are not stored; **Use example** copies one into the library.
 
@@ -156,7 +165,7 @@ The host timeline is the only clock:
 
 `scorePeriod()` tells the host when to wrap. The six adapted examples return one pass over their segments. Lissajous and a new blank sketch leave it out and play continuously.
 
-No stage writes SVG or JSON for the next stage to import. Parameters, once the reserved panel is connected, will be another host message (`SET_PARAMS`) into the same iframe. That message is named and not implemented.
+No stage writes SVG or JSON for the next stage to import. Parameter edits are a `SET_PARAMS` message into the same iframe. The host still does not evaluate sketch source.
 
 ## Example library
 
@@ -180,7 +189,19 @@ The plotter noise field used p5 Perlin noise and `noiseSeed(42)`. This score use
 
 The polyline vertices are the plotter composition written on the 600 canvas. That file used a 400 canvas; each coordinate here is one and a half times the original. That places the drawing in the studio preview. It is not a fit to the robot.
 
-Editable values live in the `params` object at the top of each sketch. The parameter panel does not write them yet. `scorePeriod()` is the loop length for the six adapted scores. Lissajous has no period. `npm test` evaluates `motion(t)` for every example in Node, checks timeline stepping, replay, and the `MOTION_FRAME` guard, and checks the Go2 chain against the Menagerie joint data. The running preview samples `motion(t)` inside the iframe when the host timeline moves. The kinematic view reads that sample. It does not refit these scores to the robot.
+Editable values live in `params` at the top of each sketch. Optional `paramInfo` sets the slider range, the step, the choices, and the label:
+
+```javascript
+const params = { amplitude: 16, brush: 'left' };
+const paramInfo = {
+  amplitude: { min: 0, max: 80, step: 1, label: 'Amplitude' },
+  brush: { options: ['left', 'right'], label: 'Brush' },
+};
+```
+
+Without `paramInfo`, a finite number becomes a slider, a boolean becomes a checkbox, and a string becomes text unless `options` lists the choices. `motion(t)` must read `params` at call time. The panel writes those values into the running sketch. It does not change the editor text, and it does not refit the drawing to the robot. Saved sketches that were copied before `paramInfo` existed still run; their controls are inferred from the values.
+
+`scorePeriod()` is the loop length for the six adapted scores. Lissajous has no period. `npm test` evaluates `motion(t)` for every example in Node, checks timeline stepping, replay, and the message guards, checks the Go2 chain against the Menagerie joint data, and checks that these defaults still match the controls. The running preview samples `motion(t)` inside the iframe when the host timeline moves. The kinematic view reads that sample. It does not refit these scores to the robot.
 
 ## Technical risks
 

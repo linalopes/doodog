@@ -12,8 +12,25 @@
   let ready = $state(false);
   let loadError = $state('');
   let view: Go2View | null = null;
+  let unreachableSamples = $state(0);
 
-  const cache: { key: string; times: number[]; marks: TrailMark[] } = { key: '', times: [], marks: [] };
+  const cache: { key: string; fingerprints: string[]; marks: TrailMark[] } = {
+    key: '',
+    fingerprints: [],
+    marks: [],
+  };
+
+  function frameFingerprint(frame: MotionFrame): string {
+    return [
+      frame.time,
+      frame.left.x,
+      frame.left.y,
+      frame.left.contact,
+      frame.right.x,
+      frame.right.y,
+      frame.right.contact,
+    ].join('|');
+  }
 
   function syncMarks(
     frames: readonly MotionFrame[],
@@ -23,18 +40,21 @@
     const key = JSON.stringify({ canvas, config });
     const prefix =
       cache.key === key &&
-      frames.length >= cache.times.length &&
-      cache.times.every((time, index) => frames[index]?.time === time);
+      frames.length >= cache.fingerprints.length &&
+      cache.fingerprints.every((fingerprint, index) => {
+        const frame = frames[index];
+        return frame !== undefined && frameFingerprint(frame) === fingerprint;
+      });
     if (!prefix) {
       cache.key = key;
-      cache.times = [];
+      cache.fingerprints = [];
       cache.marks = [];
     }
-    for (let index = cache.times.length; index < frames.length; index += 1) {
+    for (let index = cache.fingerprints.length; index < frames.length; index += 1) {
       const frame = frames[index];
       if (!frame) continue;
       cache.marks.push(...interpretFrame(frame, canvas, config).marks);
-      cache.times.push(frame.time);
+      cache.fingerprints.push(frameFingerprint(frame));
     }
     return cache.marks;
   }
@@ -68,7 +88,13 @@
     view.setHelpers(config.showGrid, config.showFrames);
     view.setBrushes(config.brushes.left, config.brushes.right);
     if (pose) view.setPose(pose);
-    view.setMarks(syncMarks(trail, canvas, config));
+    const marks = syncMarks(trail, canvas, config);
+    view.setMarks(marks);
+    let unreachable = 0;
+    for (const mark of marks) {
+      if (mark.contactRequested && mark.reachable === false) unreachable += 1;
+    }
+    if (unreachable !== unreachableSamples) unreachableSamples = unreachable;
   });
 
   function selectView(next: CameraView): void {
@@ -83,7 +109,9 @@
 
   <div class="viewport__overlay">
     <p class="viewport__banner">{PREVIEW_LABEL}</p>
-    <p class="viewport__note">Geometric preview of paint. Contact is not a physics result.</p>
+    <p class="viewport__note">
+      Geometric preview of paint. A reachable pose is not dynamically safe, and contact is not a physics result.
+    </p>
     {#if pose}
       <p class="mono viewport__reach">
         FL {pose.legs.FL.reachable === null ? 'held' : pose.legs.FL.reachable ? 'reachable' : 'unreachable'}
@@ -101,7 +129,16 @@
         {#if pose.canvasAssumed}
           <span class="viewport__dot">·</span> canvas 600×600 assumed
         {/if}
+        {#if pose.legs.FL.onLimit || pose.legs.FR.onLimit}
+          <span class="viewport__dot">·</span> joint limit
+        {/if}
       </p>
+      {#if unreachableSamples > 0}
+        <p class="viewport__note">
+          {unreachableSamples} unreachable
+          {unreachableSamples === 1 ? 'sample' : 'samples'} on this trail. The drawing was not rescaled.
+        </p>
+      {/if}
     {/if}
   </div>
 

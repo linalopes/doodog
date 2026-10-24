@@ -7,16 +7,19 @@
  * redraws up to that time, calls `motion(t)` and `scorePeriod()` there, and
  * answers with one `MOTION_FRAME`. The host keeps a single sample in flight.
  *
- * Still unused, reserved for later:
- *   HostMessage 'SET_PARAMS' { runId, params } — parameter panel
+ * `SET_PARAMS` updates the live `params` object. It does not re-run the
+ * editor source. The iframe answers with `PARAMS_RESULT` and, on the next
+ * `SET_TIME`, rebuilds paint from the new values.
  */
 
 import { isMotionFrame, type MotionFrame, type SketchMotionErrorCode } from '../motion/types.ts';
+import type { ParamControl, ParamPatch, ParamRejection } from '../params/types.ts';
 
 export type HostMessage =
   | { type: 'RUN_SKETCH'; runId: string; source: string }
   | { type: 'STOP_SKETCH'; runId: string }
-  | { type: 'SET_TIME'; runId: string; time: number; serial: number };
+  | { type: 'SET_TIME'; runId: string; time: number; serial: number }
+  | { type: 'SET_PARAMS'; runId: string; revision: number; params: ParamPatch };
 
 export type SketchErrorPhase = 'loading' | 'setup' | 'draw' | 'runtime';
 
@@ -60,6 +63,15 @@ export type RuntimeMessage =
        * Omitted on older messages.
        */
       samples?: MotionFrame[] | null;
+    }
+  | { type: 'PARAMS_SCHEMA'; runId: string; controls: ParamControl[] }
+  | {
+      type: 'PARAMS_RESULT';
+      runId: string;
+      revision: number;
+      applied: ParamPatch;
+      rejected: ParamRejection[];
+      values: ParamPatch;
     };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,6 +95,64 @@ function isMotionErrorCode(value: unknown): value is SketchMotionErrorCode | nul
 }
 
 const MAX_MOTION_SAMPLES = 320;
+
+function isParamValue(value: unknown): boolean {
+  if (typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  return typeof value === 'string' && value.length <= 80;
+}
+
+function isParamPatch(value: unknown): value is ParamPatch {
+  if (!isRecord(value) || Array.isArray(value)) return false;
+  return Object.values(value).every((entry) => isParamValue(entry));
+}
+
+function isParamControl(value: unknown): value is ParamControl {
+  if (!isRecord(value)) return false;
+  if (typeof value.key !== 'string' || value.key.length < 1 || value.key.length > 40) return false;
+  if (typeof value.label !== 'string' || value.label.length < 1 || value.label.length > 48) return false;
+  if (!isParamValue(value.value) || !isParamValue(value.defaultValue)) return false;
+  if (value.kind === 'boolean') return typeof value.value === 'boolean';
+  if (value.kind === 'number') {
+    return (
+      typeof value.value === 'number' &&
+      isFiniteNumber(value.min) &&
+      isFiniteNumber(value.max) &&
+      isFiniteNumber(value.step) &&
+      (value.step as number) > 0
+    );
+  }
+  if (value.kind === 'enum') {
+    return (
+      typeof value.value === 'string' &&
+      Array.isArray(value.options) &&
+      value.options.length > 0 &&
+      value.options.length <= 12 &&
+      value.options.every((entry) => typeof entry === 'string' && entry.length > 0 && entry.length <= 40)
+    );
+  }
+  return value.kind === 'text' && typeof value.value === 'string';
+}
+
+function isParamControlList(value: unknown): value is ParamControl[] {
+  return Array.isArray(value) && value.length <= 24 && value.every((entry) => isParamControl(entry));
+}
+
+function isRejectionList(value: unknown): value is ParamRejection[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 32 &&
+    value.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.key === 'string' &&
+        entry.key.length <= 40 &&
+        typeof entry.reason === 'string' &&
+        entry.reason.length > 0 &&
+        entry.reason.length <= 24,
+    )
+  );
+}
 
 function isSampleList(value: unknown): boolean {
   if (value === undefined || value === null) return true;
@@ -134,6 +204,16 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
         isNullableFinite(value.canvasWidth) &&
         isNullableFinite(value.canvasHeight) &&
         isSampleList(value.samples)
+      );
+    case 'PARAMS_SCHEMA':
+      return isNonEmptyString(value.runId) && isParamControlList(value.controls);
+    case 'PARAMS_RESULT':
+      return (
+        isNonEmptyString(value.runId) &&
+        isFiniteNumber(value.revision) &&
+        isParamPatch(value.applied) &&
+        isRejectionList(value.rejected) &&
+        isParamPatch(value.values)
       );
     default:
       return false;

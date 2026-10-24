@@ -3,6 +3,7 @@
   import Sidebar from '../lib/components/Sidebar.svelte';
   import type { SidebarSection } from '../lib/components/types';
   import { APP_CONFIG } from '../lib/config';
+  import ParametersPanel from '../lib/create/components/ParametersPanel.svelte';
   import KinematicSession from '../lib/simulate/components/KinematicSession.svelte';
   import PlaybackControls from '../lib/simulate/components/PlaybackControls.svelte';
   import RobotModelPanel from '../lib/simulate/components/RobotModelPanel.svelte';
@@ -74,6 +75,7 @@
   {#if current === 'viewport'}
     <div class="layout">
       <SimulationStage />
+      <ParametersPanel />
       <div class="layout__controls">
         <div class="panel">
           <p class="section-label">Playback</p>

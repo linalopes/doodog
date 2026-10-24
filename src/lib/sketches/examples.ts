@@ -14,7 +14,7 @@ import type { SketchExample } from './types';
  * playback is continuous.
  */
 
-const SCORE_RUNTIME = `// The other brush stays lifted. Change params.brush to 'right' to swap.
+const SCORE_RUNTIME = `// The other brush stays lifted. The parameter panel can set params.brush to 'right'.
 function restingBrush() {
   return { x: 22, y: height - 22, contact: false };
 }
@@ -192,6 +192,14 @@ const params = {
   brush: 'left',    // 'left' or 'right'; the other brush stays lifted
 };
 
+const paramInfo = {
+  margin: { min: 0, max: 240, step: 1, label: 'Margin' },
+  speed: { min: 20, max: 480, step: 1, label: 'Draw speed' },
+  liftSpeed: { min: 20, max: 640, step: 1, label: 'Lift speed' },
+  pause: { min: 0, max: 2, step: 0.05, label: 'Pause' },
+  brush: { options: ['left', 'right'], label: 'Brush' },
+};
+
 function buildScore() {
   const segments = [];
   const x0 = params.margin;
@@ -217,6 +225,14 @@ const params = {
   speed: 340,
   liftSpeed: 680,
   brush: 'left',
+};
+
+const paramInfo = {
+  margin: { min: 0, max: 200, step: 1, label: 'Margin' },
+  spacing: { min: 20, max: 160, step: 1, label: 'Spacing' },
+  speed: { min: 20, max: 800, step: 1, label: 'Draw speed' },
+  liftSpeed: { min: 20, max: 1200, step: 1, label: 'Lift speed' },
+  brush: { options: ['left', 'right'], label: 'Brush' },
 };
 
 function evenStops(start, end, spacing) {
@@ -267,6 +283,15 @@ const params = {
   speed: 220,       // arc length per second
   liftSpeed: 300,
   brush: 'left',
+};
+
+const paramInfo = {
+  count: { min: 1, max: 16, step: 1, label: 'Circles' },
+  minRadius: { min: 8, max: 160, step: 1, label: 'Inner radius' },
+  spacing: { min: 8, max: 80, step: 1, label: 'Spacing' },
+  speed: { min: 20, max: 640, step: 1, label: 'Draw speed' },
+  liftSpeed: { min: 20, max: 800, step: 1, label: 'Lift speed' },
+  brush: { options: ['left', 'right'], label: 'Brush' },
 };
 
 function buildScore() {
@@ -324,6 +349,19 @@ const params = {
   speed: 260,
   liftSpeed: 520,
   brush: 'left',
+};
+
+const paramInfo = {
+  margin: { min: 0, max: 200, step: 1, label: 'Margin' },
+  amplitude: { min: 0, max: 80, step: 1, label: 'Amplitude' },
+  frequency: { min: 1, max: 8, step: 1, label: 'Frequency' },
+  spacing: { min: 16, max: 120, step: 1, label: 'Spacing' },
+  phase: { min: 0, max: 6.2832, step: 0.01, label: 'Phase' },
+  phaseStep: { min: 0, max: 3.14, step: 0.01, label: 'Phase step' },
+  samples: { min: 8, max: 80, step: 1, label: 'Samples' },
+  speed: { min: 20, max: 640, step: 1, label: 'Draw speed' },
+  liftSpeed: { min: 20, max: 900, step: 1, label: 'Lift speed' },
+  brush: { options: ['left', 'right'], label: 'Brush' },
 };
 
 function rowBaselines() {
@@ -389,6 +427,18 @@ const params = {
   speed: 160,
   liftSpeed: 420,
   brush: 'left',
+};
+
+const paramInfo = {
+  margin: { min: 0, max: 180, step: 1, label: 'Margin' },
+  spacing: { min: 24, max: 120, step: 1, label: 'Spacing' },
+  length: { min: 4, max: 80, step: 1, label: 'Mark length' },
+  noiseScale: { min: 0.001, max: 0.08, step: 0.001, label: 'Noise scale' },
+  turns: { min: 0, max: 6, step: 0.1, label: 'Turns' },
+  seed: { min: 0, max: 200, step: 1, label: 'Seed' },
+  speed: { min: 20, max: 480, step: 1, label: 'Draw speed' },
+  liftSpeed: { min: 20, max: 800, step: 1, label: 'Lift speed' },
+  brush: { options: ['left', 'right'], label: 'Brush' },
 };
 
 function hashUnit(ix, iy, seed) {
@@ -460,6 +510,15 @@ const params = {
   waveSamples: 40,
   circleSides: 24,
   brush: 'left',
+};
+
+const paramInfo = {
+  speed: { min: 20, max: 480, step: 1, label: 'Draw speed' },
+  liftSpeed: { min: 20, max: 800, step: 1, label: 'Lift speed' },
+  pause: { min: 0, max: 1.5, step: 0.02, label: 'Pause' },
+  waveSamples: { min: 8, max: 80, step: 1, label: 'Wave samples' },
+  circleSides: { min: 6, max: 64, step: 1, label: 'Circle sides' },
+  brush: { options: ['left', 'right'], label: 'Brush' },
 };
 
 function traceShape(segments, points, closed, pauseOnVertices) {
@@ -547,6 +606,16 @@ const params = {
   speed: 0.55,       // time scale
   liftEvery: 5.0,    // seconds between brush lifts
   liftFor: 0.7,      // how long each lift lasts
+};
+
+const paramInfo = {
+  freqA: { min: 1, max: 8, step: 1, label: 'Frequency A' },
+  freqB: { min: 1, max: 8, step: 1, label: 'Frequency B' },
+  phase: { min: 0, max: 6.2832, step: 0.01, label: 'Phase' },
+  radius: { min: 20, max: 280, step: 1, label: 'Radius' },
+  speed: { min: 0.05, max: 2, step: 0.01, label: 'Speed' },
+  liftEvery: { min: 0.5, max: 12, step: 0.1, label: 'Lift every' },
+  liftFor: { min: 0, max: 3, step: 0.05, label: 'Lift for' },
 };
 
 let trail;

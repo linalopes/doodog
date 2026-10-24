@@ -57,6 +57,10 @@ export interface TrailMark {
   achieved: Vec3;
   paint: boolean;
   contactRequested: boolean;
+  /** Geometric reach of this sample. Null when the leg was not solved. */
+  reachable: boolean | null;
+  /** True when the solved pose sits on a joint limit. */
+  onLimit: boolean;
 }
 
 const REAR_NOTE = 'Reference pose. The body stays fixed, so this leg is not solved.';
@@ -207,6 +211,8 @@ export function marksForSnapshot(snapshot: PoseSnapshot, side: 'left' | 'right')
     achieved: leg.tipWorld,
     paint: leg.drawing && leg.reachable === true && leg.nearSurface,
     contactRequested: leg.drawing,
+    reachable: leg.reachable,
+    onLimit: leg.onLimit,
   };
 }
 

@@ -10,6 +10,7 @@
  * frames. `SET_TIME` redraws up to that time, then `motion(t)` is sampled
  * once. `replayPlan.ts` is the spec for which times get a redraw.
  */
+import { PARAM_RUNTIME_SOURCE } from '../params/runtime';
 import { MAX_REPLAY_SPAN_SECONDS, REPLAY_STEP_SECONDS } from './replayPlan';
 
 const BOOTSTRAP_BODY = String.raw`
@@ -36,6 +37,10 @@ const BOOTSTRAP_BODY = String.raw`
   var pristine = Object.create(null);
   var replayStep = __REPLAY_STEP__;
   var maxReplaySpan = __MAX_REPLAY_SPAN__;
+  var liveOverrides = null;
+  var paramsDirty = false;
+
+${PARAM_RUNTIME_SOURCE}
 
   function post(message) {
     parent.postMessage(message, "*");
@@ -160,6 +165,8 @@ const BOOTSTRAP_BODY = String.raw`
     paintedUntil = null;
     hostSeconds = 0;
     drawFailed = false;
+    window.__doodogParams = null;
+    window.__doodogParamInfo = null;
 
     var oldInstance = p5Instance;
     p5Instance = null;
@@ -202,7 +209,9 @@ const BOOTSTRAP_BODY = String.raw`
       "if(typeof __doodogV==='function')window[__doodogHooks[__doodogI]]=__doodogV;" +
       "else delete window[__doodogHooks[__doodogI]];}" +
       "catch(__doodogE){try{delete window[__doodogHooks[__doodogI]];}catch(__doodogE2){}}" +
-      "}";
+      "}" +
+      "try{var __doodogParams=eval('params');window.__doodogParams=(__doodogParams&&typeof __doodogParams==='object'&&!Array.isArray(__doodogParams))?__doodogParams:null;}catch(__doodogPE){window.__doodogParams=null;}" +
+      "try{var __doodogParamInfo=eval('paramInfo');window.__doodogParamInfo=(__doodogParamInfo&&typeof __doodogParamInfo==='object'&&!Array.isArray(__doodogParamInfo))?__doodogParamInfo:null;}catch(__doodogIE){window.__doodogParamInfo=null;}";
     userScriptEl.textContent = "(function(){" + source + epilogue + "\n})();";
     document.body.appendChild(userScriptEl);
   }
@@ -333,7 +342,10 @@ const BOOTSTRAP_BODY = String.raw`
         paintedUntil = null;
         drawFailed = false;
         drawCount = 0;
+        liveOverrides = null;
+        paramsDirty = false;
         injectSource(currentSource);
+        publishSchema(runId);
         installHooks(runId);
         startP5();
         ensureFirstFrame(runId);
@@ -343,14 +355,35 @@ const BOOTSTRAP_BODY = String.raw`
     });
   }
 
+  function publishSchema(runId) {
+    post({
+      type: "PARAMS_SCHEMA",
+      runId: runId,
+      controls: describeParams(window.__doodogParams, window.__doodogParamInfo)
+    });
+  }
+
+  function snapshotParams() {
+    var source = window.__doodogParams;
+    if (!source) return null;
+    var copy = {};
+    var keys = Object.keys(source);
+    for (var i = 0; i < keys.length; i++) copy[keys[i]] = source[keys[i]];
+    return copy;
+  }
+
+  // A rebuild re-executes the source, which restores the declared defaults.
+  // Overrides are written back before setup so draw() and motion(t) agree.
   function rebuildSketch(startAt) {
     var runId = activeRunId;
     var source = currentSource;
     if (!runId || typeof source !== "string") {
       throw new Error("No sketch is running.");
     }
+    var tokenAtStart = replayToken;
     return exclusive(async function () {
       await stopSketch();
+      if (tokenAtStart !== replayToken || activeRunId !== runId) return;
       activeRunId = runId;
       currentSource = source;
       logBudget = 200;
@@ -359,6 +392,14 @@ const BOOTSTRAP_BODY = String.raw`
       drawFailed = false;
       drawCount = 0;
       injectSource(source);
+      if (liveOverrides && window.__doodogParams) {
+        applyParamValues(
+          window.__doodogParams,
+          describeParams(window.__doodogParams, window.__doodogParamInfo),
+          liveOverrides
+        );
+      }
+      if (tokenAtStart !== replayToken) return;
       installHooks(runId);
       startP5();
     });
@@ -425,10 +466,15 @@ const BOOTSTRAP_BODY = String.raw`
   }
 
   async function advancePaint(target, token) {
-    var plan = planReplay(paintedUntil, target);
+    var dirty = paramsDirty;
+    // A parameter edit changes the composition, so the trace is replayed from
+    // the start instead of continuing the strokes drawn with the old values.
+    // paramsDirty stays set if this pass is cancelled, so the next one retries.
+    var plan = planReplay(dirty ? null : paintedUntil, target);
     var samples = [];
     if (plan.rebuild) {
       if (token !== replayToken) return samples;
+      paramsDirty = false;
       var startAt = plan.times.length ? plan.times[0] : 0;
       await rebuildSketch(startAt);
       if (token !== replayToken) return samples;
@@ -590,6 +636,67 @@ const BOOTSTRAP_BODY = String.raw`
         await stopSketch();
         activeRunId = null;
         currentSource = "";
+        liveOverrides = null;
+        paramsDirty = false;
+      });
+      return;
+    }
+
+    if (data.type === "SET_PARAMS") {
+      if (typeof data.runId !== "string" || typeof data.revision !== "number" || !isFinite(data.revision)) return;
+      if (!data.params || typeof data.params !== "object" || Array.isArray(data.params)) return;
+      if (!activeRunId || data.runId !== activeRunId) {
+        post({
+          type: "PARAMS_RESULT",
+          runId: data.runId,
+          revision: data.revision,
+          applied: {},
+          rejected: [{ key: "", reason: "inactive" }],
+          values: {}
+        });
+        return;
+      }
+      if (!window.__doodogParams) {
+        if (!replaying) {
+          post({
+            type: "PARAMS_RESULT",
+            runId: data.runId,
+            revision: data.revision,
+            applied: {},
+            rejected: [{ key: "", reason: "inactive" }],
+            values: {}
+          });
+          return;
+        }
+        liveOverrides = data.params;
+        paramsDirty = true;
+        replayToken += 1;
+        pendingTime = null;
+        post({
+          type: "PARAMS_RESULT",
+          runId: data.runId,
+          revision: data.revision,
+          applied: {},
+          rejected: [],
+          values: data.params
+        });
+        return;
+      }
+      var described = describeParams(window.__doodogParams, window.__doodogParamInfo);
+      var result = applyParamValues(window.__doodogParams, described, data.params);
+      if (result.changed) {
+        liveOverrides = snapshotParams();
+        paramsDirty = true;
+        replayToken += 1;
+        pendingTime = null;
+      }
+      post({
+        type: "PARAMS_RESULT",
+        runId: data.runId,
+        revision: data.revision,
+        applied: result.applied,
+        rejected: result.rejected,
+        values: snapshotParams() || {}
       });
       return;
     }

@@ -10,6 +10,7 @@
   import SketchLibrary from '../lib/create/components/SketchLibrary.svelte';
   import MotionReadout from '../lib/components/MotionReadout.svelte';
   import { clearMotionOutput } from '../lib/motion/output';
+  import { clearCreativeParams, subscribeParamFlush } from '../lib/params/store';
   import { seek, setPlayState, timeline } from '../lib/motion/timeline';
   import PlaybackControls from '../lib/simulate/components/PlaybackControls.svelte';
   import Timeline from '../lib/simulate/components/Timeline.svelte';
@@ -126,10 +127,20 @@
     seek(0);
     runner?.stop(reason);
     clearMotionOutput();
+    clearCreativeParams();
     activeRun = null;
     liveRun = null;
     starting = false;
   }
+
+  // Slider edits from Create or Simulate land here. Create stays mounted, so
+  // one subscription covers both workspaces. Source edits do not use this path.
+  $effect(() => {
+    return subscribeParamFlush((values, revision) => {
+      if (!runner) return;
+      runner.setParams(values, revision, get(timeline).time);
+    });
+  });
 
   // The host clock is the only time the live sketch hears. One sample is in
   // flight inside the runner; this effect just names the latest time.
@@ -212,6 +223,7 @@
     setPlayState('paused');
     seek(0);
     clearMotionOutput();
+    clearCreativeParams();
 
     try {
       const outcome = await runner.run(snapshot);
@@ -495,7 +507,8 @@
         The sketch runs in an isolated sandbox with p5.js in global mode. The timeline above is the
         only clock: play, pause, and seek drive <code>draw()</code> through <code>millis()</code> and
         sample <code>motion(t)</code> for Simulate. Declare <code>scorePeriod()</code> to loop a finite
-        score. Without it, playback is continuous. Coordinates stay in canvas units.
+        score. Without it, playback is continuous. The parameter controls update a running sketch
+        immediately. A change to this source still needs Run. Coordinates stay in canvas units.
       </p>
     </div>
   {/if}

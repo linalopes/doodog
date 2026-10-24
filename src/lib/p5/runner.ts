@@ -1,5 +1,7 @@
 import { publishMotionSample } from '../motion/output';
 import { publishMotionSamples } from '../motion/trail';
+import { applyParamResult, publishParamSchema } from '../params/store';
+import type { ParamPatch } from '../params/types';
 import { createId } from '../utils/misc';
 import { hashSource } from '../sketches/sourceHash';
 import { buildRuntimeSrcdoc } from './iframeBootstrap';
@@ -335,6 +337,19 @@ export class SketchRunner {
     this.#pump.request(time);
   }
 
+  /**
+   * Push creative parameters into the live sketch and sample `motion(t)` again
+   * at `time`. This does not reload the iframe or replace the sketch source.
+   */
+  setParams(values: ParamPatch, revision: number, time: number): void {
+    const run = this.#activeRun;
+    const frame = this.#frame;
+    if (!run || !frame) return;
+    this.#resetSampling();
+    frame.post({ type: 'SET_PARAMS', runId: run.runId, revision, params: values });
+    this.requestTime(time);
+  }
+
   async run(
     snapshot: RunSnapshot,
     options: { timeoutMs?: number } = {},
@@ -422,6 +437,16 @@ export class SketchRunner {
   }
 
   #handleMessage(message: RuntimeMessage): void {
+    if (message.type === 'PARAMS_SCHEMA') {
+      if (message.runId !== this.#activeRun?.runId) return;
+      publishParamSchema(message.runId, message.controls);
+      return;
+    }
+    if (message.type === 'PARAMS_RESULT') {
+      if (message.runId !== this.#activeRun?.runId) return;
+      applyParamResult(message.runId, message.revision, message.values);
+      return;
+    }
     if (message.type === 'MOTION_FRAME') {
       if (message.runId !== this.#activeRun?.runId) return;
       if (!this.#pump.acknowledge(message.serial)) return;
