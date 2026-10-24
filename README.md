@@ -9,7 +9,7 @@ doodog is the artistic project. doodog studio is the creative coding application
 Repository: [linalopes/doodog](https://github.com/linalopes/doodog)  
 Package identifier: `doodog`
 
-**Phase 04A · Reachability map.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. The viewport stays labeled **Kinematic Preview — Not Physically Validated**. Physics and the physical robot are not in this phase.
+**Phase 04B · Motion diagnostics.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. Simulate can chart the joint motion of a score. The viewport stays labeled **Kinematic Preview — Not Physically Validated**. Physics and the physical robot are not in this phase.
 
 Concept, interaction design and development: [Lina Lopes](https://linalopes.info/)
 
@@ -69,6 +69,20 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 - The grid is solved again when the paper, the canvas mapping, a brush offset, the lift height, the canvas size, the tip height, or the grid density changes. Playback does not solve the grid. A short delay batches those updates, and the solve is spread across turns so the page can still paint. Opacity changes only the tint.
 - The label states that the map is geometric reach. It is not balance, force, a collision-free path, or a claim that the motion is safe to run.
 
+## Implemented in Phase 04B
+
+Motion diagnostics sit in Simulate, under the shared timeline. They describe how a drawing becomes front-leg joint motion. They do not certify that motion.
+
+- The sandbox is asked for `motion(t)` at the analysis times. That request does not redraw the sketch and does not move the Three.js robot. Seeking a chart does: it uses the same host timeline as Play and the scrubber, which updates the preview and the kinematic pose. Nothing is sent to a physical robot.
+- Each returned frame is solved with the same `solvePose` path as the viewport. There is no second kinematic model. A lifted brush is still solved. An inactive brush holds the reference pose and does not raise events.
+- Units inside the solver stay radians, metres, and seconds. The charts show degrees, degrees/second, and degrees/second². Tip error is in millimetres.
+- Derivatives are finite differences on the analysis sample times, not on the playback frame rate. An interior point uses the three-point stencil that is exact for quadratics on an uneven grid. Endpoints use the one-sided three-point stencil when a third sample exists. Two samples use a single slope. Acceleration is that same operator applied to the velocity estimates. A gap in valid samples starts a new segment. The range endpoint is always included, so the last step can be shorter than the rest. A spike shorter than the interval can be missed or spread across neighbouring samples.
+- A score with `scorePeriod()` is analyzed for one declared period. A score without one stays continuous. The panel then uses a window, 8 seconds from t = 0 unless you change it. That window is not a score length.
+- The default interval is 0.05 s, capped at 400 samples. A longer period widens the interval, and the panel says so.
+- Events use thresholds you can edit. The defaults are a 2° margin to a joint limit, a 12° jump between samples, 180°/s, 1500°/s², and 15 mm of tip error. Unreachable targets use the solver’s existing 5 mm tolerance. Velocity and acceleration crossings are marked as estimates. The others are measurements. None of these numbers are Unitree motor ratings.
+- Reachable, smooth under these settings, dynamically feasible, and physically safe are different claims. This phase only measures the first and estimates the second. It does not smooth, clip, or slow the score.
+- A new run, a parameter flush, a paper or brush change, or a new interval invalidates the previous pass. Playback does not. A batch from an older run or parameter revision is discarded.
+
 ## Not in this phase
 
 - MuJoCo, contact forces, friction, or balance. Kinematic reach is not physical stability.
@@ -79,7 +93,7 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 
 ### Later MuJoCo adapter
 
-`createKinematicAdapter()` is the current `SimulationAdapter`. A MuJoCo WebAssembly adapter should implement the same interface, subscribe to the same frame, and replace this object. It should not sample `motion(t)`, start a clock, or require changes to sketches, `MotionFrame`, the timeline, or navigation. Joint angles are computed inside the adapter, after `applyFrame` receives canvas-space targets. Physics remains the only place contact may be treated as real. A threaded WASM build needs cross-origin isolation; those headers stay off until that adapter exists.
+`createKinematicAdapter()` is the current `SimulationAdapter`. A MuJoCo WebAssembly adapter should implement the same interface, subscribe to the same frame, and replace this object. It should not sample `motion(t)`, start a clock, or require changes to sketches, `MotionFrame`, the timeline, or navigation. Joint angles are computed inside the adapter, after `applyFrame` receives canvas-space targets. Physics remains the only place contact may be treated as real. Motion diagnostics stay on the kinematic solve. A physics adapter would not turn those charts into force, balance, or a safety result. A threaded WASM build needs cross-origin isolation; those headers stay off until that adapter exists.
 
 ## Limitations
 
@@ -90,6 +104,7 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 - Parameter controls accept numbers inside the declared range, booleans, listed choices, and text up to 80 characters. Other values are ignored. At most 24 controls are shown.
 - The default sheet is 0.20 m × 0.20 m, centred 0.30 m in front of the body. Some of the seven scores fall outside the front legs at that scale. That is reported as unreachable. The scores are not reshaped to fit.
 - The reachability overlay samples a grid. A cell is the reach of its centre. The boundary between colours is that grid, not a continuous outline of the workspace.
+- Motion diagnostics call `motion(t)` without redrawing. A sketch whose motion reads the canvas can disagree with the painted frame. The included scores are functions of time. The derivative of a jump is an estimate on the sample grid, not a measured motor speed.
 - Paint in the viewport is geometric proximity, not contact physics. A lifted move does not leave a mark.
 - The 3D trail keeps at most 6000 samples. A continuous score longer than that drops the oldest marks. A seek across more than 120 seconds still rebuilds only the latest 120 seconds of the drawing, and the trail follows that rebuild.
 
@@ -102,7 +117,7 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, and checks the reachability map. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
+`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, checks the reachability map, and checks motion diagnostics. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
 
 Sketches persist in `localStorage` under the prefix `doodog`. Clearing site data removes them. Built-in examples are not stored; **Use example** copies one into the library.
 

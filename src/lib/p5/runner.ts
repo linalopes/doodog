@@ -1,6 +1,7 @@
 import { publishMotionSample } from '../motion/output';
 import { publishMotionSamples } from '../motion/trail';
 import { applyParamResult, publishParamSchema } from '../params/store';
+import { bindMotionBatchSender, dispatchMotionBatch } from './motionBatch';
 import type { ParamPatch } from '../params/types';
 import { createId } from '../utils/misc';
 import { hashSource } from '../sketches/sourceHash';
@@ -317,6 +318,7 @@ export class SketchRunner {
       this.#armSampleTimer(serial);
       frame.post({ type: 'SET_TIME', runId: run.runId, time, serial });
     });
+    bindMotionBatchSender((times, serial, revision) => this.#postMotionBatch(times, serial, revision));
     this.#ensureFrame();
   }
 
@@ -335,6 +337,19 @@ export class SketchRunner {
   requestTime(time: number): void {
     if (!this.#activeRun || !this.#frame) return;
     this.#pump.request(time);
+  }
+
+  /**
+   * Ask the live sketch for `motion(t)` at several times without redrawing
+   * and without publishing a live frame. Playback keeps its own sample pump.
+   */
+  #postMotionBatch(times: number[], serial: number, revision: number): boolean {
+    const run = this.#activeRun;
+    const frame = this.#frame;
+    if (!run || !frame) return false;
+    if (times.length === 0 || times.length > 64) return false;
+    frame.post({ type: 'SAMPLE_MOTION', runId: run.runId, serial, revision, times });
+    return true;
   }
 
   /**
@@ -396,6 +411,7 @@ export class SketchRunner {
   dispose(): void {
     this.#resetSampling();
     this.#activeRun = null;
+    bindMotionBatchSender(null);
     this.#frame?.dispose();
     this.#frame = null;
   }
@@ -445,6 +461,21 @@ export class SketchRunner {
     if (message.type === 'PARAMS_RESULT') {
       if (message.runId !== this.#activeRun?.runId) return;
       applyParamResult(message.runId, message.revision, message.values);
+      return;
+    }
+    if (message.type === 'MOTION_BATCH') {
+      if (message.runId !== this.#activeRun?.runId) return;
+      const width = message.canvasWidth;
+      const height = message.canvasHeight;
+      dispatchMotionBatch({
+        runId: message.runId,
+        serial: message.serial,
+        revision: message.revision,
+        durationSeconds: message.durationSeconds,
+        canvas:
+          width !== null && height !== null && width > 0 && height > 0 ? { width, height } : null,
+        samples: message.samples,
+      });
       return;
     }
     if (message.type === 'MOTION_FRAME') {

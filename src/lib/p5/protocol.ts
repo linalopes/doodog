@@ -15,11 +15,19 @@
 import { isMotionFrame, type MotionFrame, type SketchMotionErrorCode } from '../motion/types.ts';
 import type { ParamControl, ParamPatch, ParamRejection } from '../params/types.ts';
 
+export interface MotionBatchWire {
+  time: number;
+  frame: MotionFrame | null;
+  errorCode: SketchMotionErrorCode | null;
+  errorMessage: string | null;
+}
+
 export type HostMessage =
   | { type: 'RUN_SKETCH'; runId: string; source: string }
   | { type: 'STOP_SKETCH'; runId: string }
   | { type: 'SET_TIME'; runId: string; time: number; serial: number }
-  | { type: 'SET_PARAMS'; runId: string; revision: number; params: ParamPatch };
+  | { type: 'SET_PARAMS'; runId: string; revision: number; params: ParamPatch }
+  | { type: 'SAMPLE_MOTION'; runId: string; serial: number; revision: number; times: number[] };
 
 export type SketchErrorPhase = 'loading' | 'setup' | 'draw' | 'runtime';
 
@@ -63,6 +71,16 @@ export type RuntimeMessage =
        * Omitted on older messages.
        */
       samples?: MotionFrame[] | null;
+    }
+  | {
+      type: 'MOTION_BATCH';
+      runId: string;
+      serial: number;
+      revision: number;
+      durationSeconds: number | null;
+      canvasWidth: number | null;
+      canvasHeight: number | null;
+      samples: MotionBatchWire[];
     }
   | { type: 'PARAMS_SCHEMA'; runId: string; controls: ParamControl[] }
   | {
@@ -154,6 +172,23 @@ function isRejectionList(value: unknown): value is ParamRejection[] {
   );
 }
 
+const MAX_BATCH_SAMPLES = 64;
+
+function isBatchSample(value: unknown): value is MotionBatchWire {
+  if (!isRecord(value)) return false;
+  return (
+    isFiniteNumber(value.time) &&
+    value.time >= 0 &&
+    (value.frame === null || isMotionFrame(value.frame)) &&
+    isMotionErrorCode(value.errorCode) &&
+    (value.errorMessage === null || typeof value.errorMessage === 'string')
+  );
+}
+
+function isBatchList(value: unknown): value is MotionBatchWire[] {
+  return Array.isArray(value) && value.length <= MAX_BATCH_SAMPLES && value.every((entry) => isBatchSample(entry));
+}
+
 function isSampleList(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (!Array.isArray(value) || value.length > MAX_MOTION_SAMPLES) return false;
@@ -204,6 +239,16 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
         isNullableFinite(value.canvasWidth) &&
         isNullableFinite(value.canvasHeight) &&
         isSampleList(value.samples)
+      );
+    case 'MOTION_BATCH':
+      return (
+        isNonEmptyString(value.runId) &&
+        isFiniteNumber(value.serial) &&
+        isFiniteNumber(value.revision) &&
+        isNullableFinite(value.durationSeconds) &&
+        isNullableFinite(value.canvasWidth) &&
+        isNullableFinite(value.canvasHeight) &&
+        isBatchList(value.samples)
       );
     case 'PARAMS_SCHEMA':
       return isNonEmptyString(value.runId) && isParamControlList(value.controls);

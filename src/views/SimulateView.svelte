@@ -8,6 +8,7 @@
   import PlaybackControls from '../lib/simulate/components/PlaybackControls.svelte';
   import RobotModelPanel from '../lib/simulate/components/RobotModelPanel.svelte';
   import SimulationStage from '../lib/simulate/components/SimulationStage.svelte';
+  import DiagnosticsPanel from '../lib/simulate/components/DiagnosticsPanel.svelte';
   import Timeline from '../lib/simulate/components/Timeline.svelte';
   import { timeline } from '../lib/motion/timeline';
   import { simulateSection } from '../lib/stores/navigation';
@@ -83,6 +84,7 @@
         </div>
         <Timeline />
       </div>
+      <DiagnosticsPanel />
     </div>
   {:else if current === 'robot-model'}
     <RobotModelPanel />

@@ -8,7 +8,8 @@
  * The host timeline is the only clock. After p5 binds its globals, `millis`
  * is replaced with the host time and `noLoop()` stops p5 from scheduling
  * frames. `SET_TIME` redraws up to that time, then `motion(t)` is sampled
- * once. `replayPlan.ts` is the spec for which times get a redraw.
+ * once. `SAMPLE_MOTION` reads `motion(t)` at several times without redrawing.
+ * `replayPlan.ts` is the spec for which times get a redraw.
  */
 import { PARAM_RUNTIME_SOURCE } from '../params/runtime';
 import { MAX_REPLAY_SPAN_SECONDS, REPLAY_STEP_SECONDS } from './replayPlan';
@@ -697,6 +698,46 @@ ${PARAM_RUNTIME_SOURCE}
         applied: result.applied,
         rejected: result.rejected,
         values: snapshotParams() || {}
+      });
+      return;
+    }
+
+    if (data.type === "SAMPLE_MOTION") {
+      if (typeof data.runId !== "string" || typeof data.serial !== "number" || !isFinite(data.serial)) return;
+      if (typeof data.revision !== "number" || !isFinite(data.revision)) return;
+      if (!activeRunId || data.runId !== activeRunId) return;
+      if (!Array.isArray(data.times) || data.times.length > 64) return;
+      var batch = [];
+      for (var sampleIndex = 0; sampleIndex < data.times.length; sampleIndex++) {
+        var sampleTime = data.times[sampleIndex];
+        if (typeof sampleTime !== "number" || !isFinite(sampleTime) || sampleTime < 0) {
+          batch.push({
+            time: 0,
+            frame: null,
+            errorCode: "invalid",
+            errorMessage: "The analysis asked for a time that is not a finite number of seconds."
+          });
+          continue;
+        }
+        var sampledMotion = readMotion(sampleTime);
+        batch.push({
+          time: sampleTime,
+          frame: sampledMotion.frame,
+          errorCode: sampledMotion.errorCode,
+          errorMessage: sampledMotion.errorMessage
+        });
+      }
+      if (!activeRunId || data.runId !== activeRunId) return;
+      var batchCanvas = readCanvasInfo();
+      post({
+        type: "MOTION_BATCH",
+        runId: data.runId,
+        serial: data.serial,
+        revision: data.revision,
+        durationSeconds: readDuration(),
+        canvasWidth: typeof batchCanvas.canvasWidth === "number" ? batchCanvas.canvasWidth : null,
+        canvasHeight: typeof batchCanvas.canvasHeight === "number" ? batchCanvas.canvasHeight : null,
+        samples: batch
       });
       return;
     }

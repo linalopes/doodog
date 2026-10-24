@@ -20,6 +20,9 @@ const INITIAL: CreativeParamState = { runId: null, controls: [], values: {} };
 const store = writable<CreativeParamState>(INITIAL);
 export const creativeParams = { subscribe: store.subscribe };
 
+/** Bumps when a run publishes params or a flush is sent to the sandbox. */
+export const paramRevision = writable(0);
+
 type FlushListener = (values: ParamPatch, revision: number) => void;
 
 const listeners = new Set<FlushListener>();
@@ -47,6 +50,8 @@ function controlMatches(control: ParamControl, value: ParamValue): boolean {
 export function publishParamSchema(runId: string, controls: ParamControl[]): void {
   const values: ParamPatch = {};
   for (const control of controls) values[control.key] = control.value;
+  revision += 1;
+  paramRevision.set(revision);
   store.set({ runId, controls, values });
 }
 
@@ -55,6 +60,7 @@ export function clearCreativeParams(): void {
   timer = 0;
   waitStarted = 0;
   revision += 1;
+  paramRevision.set(revision);
   store.set(INITIAL);
 }
 
@@ -118,6 +124,7 @@ function emit(): void {
   const current = get(store);
   if (!current.runId) return;
   revision += 1;
+  paramRevision.set(revision);
   const snapshot = { ...current.values };
   for (const listener of listeners) listener(snapshot, revision);
 }
