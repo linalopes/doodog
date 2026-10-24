@@ -25,8 +25,8 @@ export const APP_CONFIG = {
 
   /** Current development phase, shown in the shell. */
   phase: {
-    id: '03',
-    label: 'Phase 03 · Parametric playground',
+    id: '04A',
+    label: 'Phase 04A · Reachability map',
   },
 
   /**

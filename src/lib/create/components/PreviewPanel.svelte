@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { SketchRunner, type RunnerError, type RuntimeLogEntry } from '../../p5/runner';
+  import ReachabilityOverlay from './ReachabilityOverlay.svelte';
 
   export type PreviewStatus =
     | 'idle'
@@ -84,6 +85,7 @@
 <div class="preview">
   <div class="preview__stage">
     <div class="preview__frame" bind:this={container}></div>
+    <ReachabilityOverlay frame={container} />
 
     {#if error}
       <div class="preview__error" role="alert">
@@ -187,6 +189,7 @@
   .preview__error,
   .preview__empty {
     position: absolute;
+    z-index: 4;
     inset: auto var(--space-3) var(--space-3);
     max-width: calc(100% - var(--space-6));
     background: var(--brand-white);

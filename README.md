@@ -9,7 +9,7 @@ doodog is the artistic project. doodog studio is the creative coding application
 Repository: [linalopes/doodog](https://github.com/linalopes/doodog)  
 Package identifier: `doodog`
 
-**Phase 03 · Parametric playground.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters in a sketch update the drawing and the kinematic pose together. The viewport stays labeled **Kinematic Preview — Not Physically Validated**. Physics and the physical robot are not in this phase.
+**Phase 04A · Reachability map.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. The viewport stays labeled **Kinematic Preview — Not Physically Validated**. Physics and the physical robot are not in this phase.
 
 Concept, interaction design and development: [Lina Lopes](https://linalopes.info/)
 
@@ -60,6 +60,15 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 - Creative parameters stay separate from the robot. Amplitude, frequency, phase, spacing, brush choice, and contact pattern live on the sketch. Paper position and size, canvas mapping, brush mounts, lift height, and the reference pose stay in the robot model panel. A sketch that draws outside the sheet is reported as unreachable. The sheet is not resized to fit it.
 - The viewport reports current reachability, left and right tip error in millimetres, a joint-limit mark, and how many trail samples requested contact but were geometrically unreachable. Reachable does not mean dynamically safe.
 
+## Implemented in Phase 04A
+
+- A reachability overlay on the Create preview. It samples the p5 canvas on a grid and solves the front legs with the same inverse kinematics and brush offsets as the kinematic Go2. The regions are left only, right only, both, and neither. They are not circles and they are not drawn by the sketch.
+- Brush down evaluates the tip on the paper. Brush up evaluates it at the configured lift height. The overlay names which of those heights is in use.
+- The map is a layer in the host page. It does not change the p5 drawing and it is not written into sketch source. Reach, opacity, tip height, and grid density are display controls.
+- Pointing at the canvas reports that Cartesian point, which brush can reach it, and the position error in millimetres. An inactive brush is reported as inactive.
+- The grid is solved again when the paper, the canvas mapping, a brush offset, the lift height, the canvas size, the tip height, or the grid density changes. Playback does not solve the grid. A short delay batches those updates, and the solve is spread across turns so the page can still paint. Opacity changes only the tint.
+- The label states that the map is geometric reach. It is not balance, force, a collision-free path, or a claim that the motion is safe to run.
+
 ## Not in this phase
 
 - MuJoCo, contact forces, friction, or balance. Kinematic reach is not physical stability.
@@ -80,6 +89,7 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 - A sketch with no `motion(t)` still draws. The readout says the simulation has nothing to follow. The robot then holds the reference pose. A bad return or a throw is reported the same way and does not stop the preview by itself.
 - Parameter controls accept numbers inside the declared range, booleans, listed choices, and text up to 80 characters. Other values are ignored. At most 24 controls are shown.
 - The default sheet is 0.20 m × 0.20 m, centred 0.30 m in front of the body. Some of the seven scores fall outside the front legs at that scale. That is reported as unreachable. The scores are not reshaped to fit.
+- The reachability overlay samples a grid. A cell is the reach of its centre. The boundary between colours is that grid, not a continuous outline of the workspace.
 - Paint in the viewport is geometric proximity, not contact physics. A lifted move does not leave a mark.
 - The 3D trail keeps at most 6000 samples. A continuous score longer than that drops the oldest marks. A seek across more than 120 seconds still rebuilds only the latest 120 seconds of the drawing, and the trail follows that rebuild.
 
@@ -92,7 +102,7 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, and checks parameter inference. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
+`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, and checks the reachability map. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
 
 Sketches persist in `localStorage` under the prefix `doodog`. Clearing site data removes them. Built-in examples are not stored; **Use example** copies one into the library.
 
