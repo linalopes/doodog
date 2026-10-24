@@ -1,0 +1,74 @@
+/*
+ * School of Tomorrow's AI brand tokens.
+ *
+ * Source of truth: https://linalopes.github.io/SchoolAI-brand-kit/
+ * (tokens.json + styles.css). Values below are copied from the kit, not
+ * invented. Semantic aliases follow the kit's own naming where it has one.
+ */
+
+:root {
+  /* Core palette */
+  --brand-deep-purple: #22113e;
+  --brand-gray-green: #cad8d8;
+  --brand-pink: #ea7dff;
+  --brand-turquoise: #08f2db;
+  --brand-white: #ffffff;
+
+  /* Reserved colours. Magenta is for inline links on light surfaces only.
+     Violet and Coral are mark-particle colours: never backgrounds, type, or controls. */
+  --brand-magenta: #a21caf;
+  --brand-violet: #773aef;
+  --brand-coral: #ff6ca7;
+
+  /* Semantic aliases (brand kit) */
+  --color-bg: var(--brand-white);
+  --color-text: var(--brand-deep-purple);
+  --color-text-muted: #888888;
+  --color-surface: var(--brand-gray-green);
+  --color-surface-tint: rgba(202, 216, 216, 0.35);
+  --color-primary: var(--brand-pink);
+  --color-on-primary: var(--brand-deep-purple);
+  --color-on-primary-contrast: var(--brand-white);
+  --color-accent: var(--brand-turquoise);
+  --color-on-accent: var(--brand-deep-purple);
+  --color-link: var(--brand-magenta);
+  --color-link-underline: rgba(162, 28, 175, 0.4);
+  --color-link-hover: var(--brand-pink);
+  --color-link-on-dark: var(--brand-turquoise);
+  --color-link-on-dark-hover: var(--brand-pink);
+  --color-border: rgba(34, 17, 62, 0.14);
+  --color-border-subtle: rgba(34, 17, 62, 0.08);
+  --color-border-strong: rgba(34, 17, 62, 0.18);
+  --color-border-on-dark: rgba(255, 255, 255, 0.14);
+  --color-success: #1a7a45;
+  --color-warning: #9a6b00;
+  --color-danger: #cc4444;
+
+  /* Shape, spacing */
+  --radius: 4px;
+  --border-width: 1px;
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 36px;
+  --space-6: 52px;
+
+  /* Type */
+  --font-title: "Space Grotesk", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "Courier Prime", ui-monospace, "SF Mono", monospace;
+
+  /* Motion (brand kit "breathe") */
+  --motion-breathe-duration: 4s;
+
+  /* Composite helpers used across components */
+  --border: var(--border-width) solid var(--color-border);
+  --border-strong: var(--border-width) solid var(--color-border-strong);
+
+  /* Shell chrome — locked so flex content cannot compress headers
+     (pattern inherited from Plotter Workspace). */
+  --app-header-height: 72px;
+  --app-section-chrome-height: 96px;
+  --app-sidebar-width: 272px;
+}

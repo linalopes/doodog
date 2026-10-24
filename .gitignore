@@ -1,0 +1,27 @@
+# Dependencies and build output
+node_modules
+dist
+dist-ssr
+*.local
+
+# Generated: classic p5 build copied by scripts/sync-sketch-vendor.mjs
+public/vendor/
+
+# Reference clones used during development (not part of this project)
+.ref/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

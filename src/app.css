@@ -1,0 +1,478 @@
+@import url("https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Inter:wght@300;600&family=Space+Grotesk:wght@300;500&display=swap");
+@import "./lib/brand/tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  /* The shell manages its own scroll regions; the page itself never scrolls. */
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+}
+
+/*
+  Locked shell chrome. These global rules intentionally outrank component
+  styles so workspace content cannot compress the top navigation or the
+  page-title band.
+*/
+.app-header {
+  height: var(--app-header-height) !important;
+  min-height: var(--app-header-height) !important;
+  max-height: var(--app-header-height) !important;
+  overflow: hidden;
+}
+
+.section-chrome {
+  flex: 0 0 var(--app-section-chrome-height) !important;
+  height: var(--app-section-chrome-height) !important;
+  min-height: var(--app-section-chrome-height) !important;
+  max-height: var(--app-section-chrome-height) !important;
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------ typography */
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-title);
+  font-weight: 300;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--color-text);
+}
+
+h1 {
+  font-size: 26px;
+  line-height: 1.1;
+}
+h2 {
+  font-size: 21px;
+  line-height: 1.2;
+}
+h3 {
+  font-size: 16px;
+  font-weight: 500;
+}
+h4 {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+p {
+  margin: 0 0 var(--space-3);
+  max-width: 68ch;
+}
+
+p:last-child {
+  margin-bottom: 0;
+}
+
+/* Inline links follow the kit: magenta on light, turquoise on dark. */
+a {
+  color: var(--color-link);
+  text-decoration: underline;
+  text-decoration-color: var(--color-link-underline);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: color 0.2s ease, text-decoration-color 0.2s ease;
+}
+
+a:hover {
+  color: var(--color-link-hover);
+  text-decoration-color: var(--color-link-hover);
+}
+
+.on-dark a {
+  color: var(--color-link-on-dark);
+  text-decoration-color: rgba(8, 242, 219, 0.45);
+}
+
+.on-dark a:hover {
+  color: var(--color-link-on-dark-hover);
+  text-decoration-color: var(--color-link-on-dark-hover);
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* ----------------------------------------------------------------- focus */
+
+:focus-visible {
+  outline: 2px solid var(--brand-deep-purple);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.on-dark :focus-visible {
+  outline-color: var(--brand-turquoise);
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------- labels */
+
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: 0 0 var(--space-2);
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* ---------------------------------------------------------------- panels */
+
+.panel {
+  border: var(--border);
+  border-radius: var(--radius);
+  background: var(--brand-white);
+  padding: var(--space-4);
+}
+
+.panel--soft {
+  background: var(--color-surface-tint);
+}
+
+.panel__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.divider {
+  border: 0;
+  border-top: var(--border);
+  margin: var(--space-4) 0;
+}
+
+/* --------------------------------------------------------------- buttons */
+
+.btn {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 13px;
+  line-height: 1;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: var(--border-width) solid var(--color-border-strong);
+  background: var(--brand-white);
+  color: var(--color-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--color-text);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* Primary: outlined in ink; fills pink on hover (kit .button--primary). */
+.btn--primary {
+  border-color: var(--color-text);
+  font-weight: 700;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  border-color: var(--color-primary);
+}
+
+/* Accent: turquoise fill with Deep Purple text (approved pair). */
+.btn--accent {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-color: var(--color-accent);
+  font-weight: 700;
+}
+
+.btn--accent:hover:not(:disabled) {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  border-color: var(--color-primary);
+}
+
+.btn--ghost {
+  border-color: var(--color-border);
+}
+
+.btn--danger {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: rgba(204, 68, 68, 0.08);
+  border-color: var(--color-danger);
+}
+
+.btn--small {
+  font-size: 12px;
+  padding: var(--space-1) var(--space-2);
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- fields */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.field__label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.field__hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  max-width: 46ch;
+}
+
+.field input[type="text"],
+.field input[type="number"],
+.field input[type="range"],
+.field select,
+.field textarea {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--brand-white);
+  border: var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  width: 100%;
+}
+
+.field input:focus {
+  border-color: var(--color-primary);
+}
+
+.field input:disabled,
+.field select:disabled,
+.field textarea:disabled {
+  background: var(--color-surface-tint);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------- badges */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  border: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.badge--accent {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.badge--primary {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.badge--dark {
+  background: var(--color-text);
+  color: var(--brand-white);
+}
+
+.badge--outline {
+  background: transparent;
+  border: var(--border-width) solid var(--color-text);
+  font-weight: 400;
+}
+
+/* Quiet category label (kit .tag). */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text);
+  opacity: 0.62;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  line-height: 1;
+}
+
+.tag--accent {
+  opacity: 1;
+  border-color: var(--color-accent);
+}
+
+/* -------------------------------------------------------------- callouts */
+
+.callout {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  max-width: 60ch;
+  font-size: 13px;
+}
+
+.callout--tint {
+  background: var(--color-surface-tint);
+}
+
+.callout__marker {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.callout__text {
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Status note that reads as a warning without leaving the palette family. */
+.callout--warn {
+  border-left: 2px solid var(--color-warning);
+}
+
+.help-text {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: var(--space-1) 0 0;
+}
+
+/* ------------------------------------------------------------- data rows */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: var(--border);
+}
+
+.data-table th {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes sota-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
