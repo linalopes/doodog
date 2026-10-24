@@ -26,12 +26,24 @@ import {
 } from '../go2/model.ts';
 import { trailLines } from '../go2/paint.ts';
 import type { PoseSnapshot, TrailMark } from '../go2/pose.ts';
+import type { Go2JointState } from '../adapters/types.ts';
+import type { QuatWxyz } from '../physics/types.ts';
 
 export type CameraView = 'perspective' | 'top' | 'side';
+
+export interface PhysicsMeshPose {
+  joints: Go2JointState;
+  basePosition: Vec3;
+  baseQuaternion: QuatWxyz;
+}
 
 export interface Go2View {
   readonly ready: Promise<void>;
   setPose(snapshot: PoseSnapshot): void;
+  /** Paper only. Physics mode uses this so the sheet can move without pinning the body. */
+  setPaper(snapshot: PoseSnapshot): void;
+  /** Body pose and joint angles from MuJoCo. Does not move the paper or the paint. */
+  setPhysicsPose(pose: PhysicsMeshPose): void;
   setMarks(marks: readonly TrailMark[]): void;
   setHelpers(grid: boolean, frames: boolean): void;
   setBrushes(left: BrushMount, right: BrushMount): void;
@@ -211,18 +223,45 @@ export function createGo2View(
     requestRender();
   }
 
-  function setPose(snapshot: PoseSnapshot): void {
+  function applyJoints(joints: Go2JointState): void {
     for (const id of ['FL', 'FR', 'RL', 'RR'] as const) {
       const nodes = legs[id];
-      const report = snapshot.legs[id];
-      if (!nodes || !report) continue;
-      nodes.abduction.quaternion.setFromAxisAngle(X_AXIS, report.joints[0]);
-      nodes.hip.quaternion.setFromAxisAngle(Y_AXIS, report.joints[1]);
-      nodes.knee.quaternion.setFromAxisAngle(Y_AXIS, report.joints[2]);
+      const angles = joints[id];
+      if (!nodes || !angles) continue;
+      nodes.abduction.quaternion.setFromAxisAngle(X_AXIS, angles[0]);
+      nodes.hip.quaternion.setFromAxisAngle(Y_AXIS, angles[1]);
+      nodes.knee.quaternion.setFromAxisAngle(Y_AXIS, angles[2]);
     }
+  }
+
+  function pinBase(): void {
+    robot.position.set(BODY_POSITION[0], BODY_POSITION[1], BODY_POSITION[2]);
+    robot.quaternion.identity();
+  }
+
+  function setPaper(snapshot: PoseSnapshot): void {
     paper.position.set(snapshot.paperOrigin[0], snapshot.paperOrigin[1], snapshot.paperOrigin[2] + 0.001);
     paper.scale.set(Math.max(snapshot.paperSize.widthM, 0.01), Math.max(snapshot.paperSize.heightM, 0.01), 1);
     paper.rotation.z = snapshot.paperYawRad;
+    requestRender();
+  }
+
+  function setPose(snapshot: PoseSnapshot): void {
+    pinBase();
+    applyJoints({
+      FL: [snapshot.legs.FL.joints[0], snapshot.legs.FL.joints[1], snapshot.legs.FL.joints[2]],
+      FR: [snapshot.legs.FR.joints[0], snapshot.legs.FR.joints[1], snapshot.legs.FR.joints[2]],
+      RL: [snapshot.legs.RL.joints[0], snapshot.legs.RL.joints[1], snapshot.legs.RL.joints[2]],
+      RR: [snapshot.legs.RR.joints[0], snapshot.legs.RR.joints[1], snapshot.legs.RR.joints[2]],
+    });
+    setPaper(snapshot);
+  }
+
+  function setPhysicsPose(pose: PhysicsMeshPose): void {
+    applyJoints(pose.joints);
+    robot.position.set(pose.basePosition[0], pose.basePosition[1], pose.basePosition[2]);
+    const quat = pose.baseQuaternion;
+    robot.quaternion.set(quat[1], quat[2], quat[3], quat[0]);
     requestRender();
   }
 
@@ -256,6 +295,8 @@ export function createGo2View(
   return {
     ready,
     setPose,
+    setPaper,
+    setPhysicsPose,
     setMarks,
     setHelpers,
     setBrushes,

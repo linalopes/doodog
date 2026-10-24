@@ -9,19 +9,22 @@
   import RobotModelPanel from '../lib/simulate/components/RobotModelPanel.svelte';
   import SimulationStage from '../lib/simulate/components/SimulationStage.svelte';
   import DiagnosticsPanel from '../lib/simulate/components/DiagnosticsPanel.svelte';
+  import PhysicsDirector from '../lib/simulate/components/PhysicsDirector.svelte';
+  import PhysicsPanel from '../lib/simulate/components/PhysicsPanel.svelte';
   import Timeline from '../lib/simulate/components/Timeline.svelte';
   import { timeline } from '../lib/motion/timeline';
+  import { simulationBackend } from '../lib/simulate/physics/backend';
   import { simulateSection } from '../lib/stores/navigation';
 
   /**
    * Simulate workspace. Playback writes the same timeline Create uses.
    * The viewport poses a kinematic Unitree Go2 from the latest MotionFrame.
-   * MuJoCo and the physical robot are not part of this view.
+   * MuJoCo is an optional experiment in the same viewport. It does not edit the sketch.
    */
   const SECTIONS: SidebarSection[] = [
     { id: 'viewport', label: 'Viewport', hint: 'Live' },
     { id: 'robot-model', label: 'Robot model', hint: 'Go2' },
-    { id: 'physics', label: 'Physics', hint: 'Later' },
+    { id: 'physics', label: 'Physics', hint: 'Experimental' },
   ];
 
   const META: Record<string, { title: string; description: string; tag: string }> = {
@@ -39,8 +42,9 @@
     },
     physics: {
       title: 'Physics',
-      description: 'MuJoCo is not running. Reachability here is kinematic only and does not imply balance or contact.',
-      tag: 'Not implemented',
+      description:
+        'An optional MuJoCo experiment. The Go2 can fall under gravity. Brush paths are not tracked, and nothing here is a safety result.',
+      tag: 'Experimental',
     },
   };
 
@@ -52,6 +56,7 @@
 
 <div class="workspace">
 <KinematicSession />
+<PhysicsDirector />
 <Sidebar title="Simulate" sections={SECTIONS} active={current} onSelect={(id) => simulateSection.set(id)}>
   {#snippet bottom()}
     <p class="section-label">Shared timeline</p>
@@ -85,18 +90,22 @@
         <Timeline />
       </div>
       <DiagnosticsPanel />
+      {#if $simulationBackend === 'mujoco'}
+        <PhysicsPanel />
+      {/if}
     </div>
   {:else if current === 'robot-model'}
     <RobotModelPanel />
   {:else}
-    <div class="panel panel--soft">
-      <h2>Physics</h2>
+    <div class="layout">
+      <PhysicsPanel />
       <p class="muted">
-        The kinematic adapter already implements <code>SimulationAdapter</code>. A MuJoCo
-        WebAssembly adapter can replace it later without changing sketches, <code>MotionFrame</code>,
-        or the timeline. It is not included. Reachability in the viewport is not contact, friction,
-        or balance.
+        The robot is drawn in the viewport. Switching to MuJoCo there does not change the sketch
+        or its parameters. Kinematic reachability and motion diagnostics stay on the geometric solve.
       </p>
+      <button type="button" class="btn btn--small" onclick={() => simulateSection.set('viewport')}>
+        Open the viewport
+      </button>
     </div>
   {/if}
 </MainSection>

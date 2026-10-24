@@ -7,10 +7,10 @@ import type { MotionFrame, MotionProgramInfo } from '../../motion/types';
  * `src/lib/motion/output.ts`. Phase 02B's first adapter should subscribe to
  * that store and call `applyFrame` with `frame`. Do not sample `motion(t)`
  * again, do not start a second clock, and do not convert canvas units into
- * joint angles before `applyFrame`. A later MuJoCo adapter implements this
- * same interface. Neither adapter reads sketch source.
- *
- * Nothing in this file is instantiated. There is no fake motion.
+ * joint angles before `applyFrame`. The kinematic adapter is the only
+ * implementation of this interface. MuJoCo is a separate stateful session:
+ * it is not a function from one MotionFrame to one pose, and it does not
+ * replace `applyFrame`. Neither path reads sketch source.
  */
 
 export type SimulationBackend = 'three-kinematic' | 'mujoco-wasm';

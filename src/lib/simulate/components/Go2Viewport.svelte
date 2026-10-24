@@ -6,6 +6,9 @@
   import type { SimConfig } from '../go2/defaults';
   import { interpretFrame, PREVIEW_LABEL, type TrailMark } from '../go2/pose';
   import { kinematicPose, setHelper, simSettings } from '../go2/settings';
+  import { simulationBackend, selectSimulationBackend } from '../physics/backend';
+  import { physicsRun } from '../physics/run';
+  import { PHYSICS_LABEL } from '../physics/types';
   import { createGo2View, type CameraView, type Go2View } from '../scene/createGo2View';
 
   let host: HTMLDivElement | undefined = $state();
@@ -13,6 +16,7 @@
   let loadError = $state('');
   let view: Go2View | null = null;
   let unreachableSamples = $state(0);
+  let trailsHidden = false;
 
   const cache: { key: string; fingerprints: string[]; marks: TrailMark[] } = {
     key: '',
@@ -87,9 +91,25 @@
     const canvas = $motionOutput.canvas;
     view.setHelpers(config.showGrid, config.showFrames);
     view.setBrushes(config.brushes.left, config.brushes.right);
-    if (pose) view.setPose(pose);
-    const marks = syncMarks(trail, canvas, config);
-    view.setMarks(marks);
+    const physics = $simulationBackend === 'mujoco' ? $physicsRun.snapshot : null;
+    let marks: TrailMark[] = [];
+    if (physics) {
+      if (pose) view.setPaper(pose);
+      view.setPhysicsPose({
+        joints: physics.joints,
+        basePosition: physics.basePosition,
+        baseQuaternion: physics.baseQuaternion,
+      });
+      if (!trailsHidden) {
+        view.setMarks([]);
+        trailsHidden = true;
+      }
+    } else if (pose) {
+      trailsHidden = false;
+      view.setPose(pose);
+      marks = syncMarks(trail, canvas, config);
+      view.setMarks(marks);
+    }
     let unreachable = 0;
     for (const mark of marks) {
       if (mark.contactRequested && mark.reachable === false) unreachable += 1;
@@ -102,17 +122,30 @@
   }
 
   const pose = $derived($kinematicPose);
+  const physicsSelected = $derived($simulationBackend === 'mujoco');
+  const physicsLive = $derived(physicsSelected && $physicsRun.snapshot !== null);
 </script>
 
 <div class="viewport">
   <div class="viewport__stage" bind:this={host} data-role="simulation-viewport"></div>
 
   <div class="viewport__overlay">
-    <p class="viewport__banner">{PREVIEW_LABEL}</p>
-    <p class="viewport__note">
-      Geometric preview of paint. A reachable pose is not dynamically safe, and contact is not a physics result.
-    </p>
-    {#if pose}
+    <p class="viewport__banner">{physicsLive ? PHYSICS_LABEL : PREVIEW_LABEL}</p>
+    {#if physicsLive}
+      <p class="viewport__note">
+        Zero torque. The robot may fall. Contacts are from MuJoCo. This is not a safe path, and geometric paint is hidden.
+      </p>
+      {#if $physicsRun.snapshot}
+        <p class="mono viewport__reach">
+          base z {$physicsRun.snapshot.basePosition[2].toFixed(3)} m · {$physicsRun.snapshot.contactCount} contacts · t {$physicsRun.snapshot.time.toFixed(2)} s
+        </p>
+      {/if}
+    {:else}
+      <p class="viewport__note">
+        Geometric preview of paint. A reachable pose is not dynamically safe, and contact is not a physics result.
+      </p>
+    {/if}
+    {#if pose && !physicsLive}
       <p class="mono viewport__reach">
         FL {pose.legs.FL.reachable === null ? 'held' : pose.legs.FL.reachable ? 'reachable' : 'unreachable'}
         {#if pose.legs.FL.positionErrorM !== null}
@@ -143,6 +176,24 @@
   </div>
 
   <div class="viewport__bar">
+    <div class="viewport__views" role="group" aria-label="Simulation backend">
+      <button
+        type="button"
+        class="btn btn--small"
+        aria-pressed={!physicsSelected}
+        onclick={() => selectSimulationBackend('kinematic')}
+      >
+        Kinematic Preview
+      </button>
+      <button
+        type="button"
+        class="btn btn--small"
+        aria-pressed={physicsSelected}
+        onclick={() => selectSimulationBackend('mujoco')}
+      >
+        MuJoCo Physics — Experimental
+      </button>
+    </div>
     <div class="viewport__views" role="group" aria-label="Camera">
       <button type="button" class="btn btn--small" onclick={() => selectView('perspective')}>Perspective</button>
       <button type="button" class="btn btn--small" onclick={() => selectView('top')}>Top</button>
@@ -166,11 +217,13 @@
         Frames
       </button>
     </div>
-    <p class="viewport__legend">
-      <span><i class="swatch swatch--desired"></i> Desired</span>
-      <span><i class="swatch swatch--achieved"></i> Achieved tip</span>
-      <span><i class="swatch swatch--paint"></i> Geometric paint</span>
-    </p>
+    {#if !physicsLive}
+      <p class="viewport__legend">
+        <span><i class="swatch swatch--desired"></i> Desired</span>
+        <span><i class="swatch swatch--achieved"></i> Achieved tip</span>
+        <span><i class="swatch swatch--paint"></i> Geometric paint</span>
+      </p>
+    {/if}
   </div>
 
   {#if !ready && !loadError}

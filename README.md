@@ -9,7 +9,7 @@ doodog is the artistic project. doodog studio is the creative coding application
 Repository: [linalopes/doodog](https://github.com/linalopes/doodog)  
 Package identifier: `doodog`
 
-**Phase 04B · Motion diagnostics.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. Simulate can chart the joint motion of a score. The viewport stays labeled **Kinematic Preview — Not Physically Validated**. Physics and the physical robot are not in this phase.
+**Phase 05A · MuJoCo physics foundation.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. Simulate can chart the joint motion of a score. An optional MuJoCo experiment can drop the same Go2 under gravity. The kinematic view stays labeled **Kinematic Preview — Not Physically Validated**. The physics view is labeled **MuJoCo Physics — Experimental**. The physical robot is not in this phase.
 
 Concept, interaction design and development: [Lina Lopes](https://linalopes.info/)
 
@@ -83,17 +83,30 @@ Motion diagnostics sit in Simulate, under the shared timeline. They describe how
 - Reachable, smooth under these settings, dynamically feasible, and physically safe are different claims. This phase only measures the first and estimates the second. It does not smooth, clip, or slow the score.
 - A new run, a parameter flush, a paper or brush change, or a new interval invalidates the previous pass. Playback does not. A batch from an older run or parameter revision is discarded.
 
+## Implemented in Phase 05A
+
+MuJoCo is an optional experiment. The kinematic adapter is unchanged, and `applyFrame` is still a geometric pose, not a physics step.
+
+- The package is the official single-threaded `@mujoco/mujoco` build (Apache-2.0). It does not use `SharedArrayBuffer`, so the app does not send `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. The multi-threaded build would need those headers. They would block the Google Fonts stylesheet and can stop the sandboxed p5 iframe from loading its script, so they stay off.
+- WASM loads in a worker the first time the artist chooses Initialize. Opening Create, running a sketch, or viewing the kinematic preview does not load the physics engine.
+- The worker reads the vendored Menagerie `go2.xml` and its OBJ meshes. That file is the Unitree model (BSD-3-Clause, HangZhou YuShu TECHNOLOGY CO.,LTD. / Unitree Robotics). It has no ground. The loader includes it and adds a plane named `floor`. The vendored XML is not rewritten. The home posture already meets that plane, so contact can be reported before any step. Motor commands are cleared to 0 Nm after the home keyframe, because those `ctrl` numbers are crouched joint angles and these actuators are torque motors. There is no balance controller. If the robot falls, that is the simulated result.
+- The host timeline stays the clock the artist sees. Physics time advances by the model timestep (0.002 s) toward the time since Initialize or Reset. At most 16 steps run before the page can paint again. Seeking backward inside the run resets the model and replays it. Seeking before the run is refused, and the pose is not jumped. Play and pause are the shared timeline controls.
+- The existing Three.js Go2 is moved by the simulated base pose and joint angles. It is not a second robot. Geometric paint is hidden while the physics pose is showing. Switching back to Kinematic Preview restores the fixed-body pose and does not change the sketch or its parameters.
+- Motion diagnostics, the reachability map, and the seven sketches stay on the kinematic solve.
+
+### Still for Phase 05B
+
+- Dynamic tracking of a p5.js brush trajectory.
+- A balance or locomotion controller.
+- Real brush contact and paint deposition.
+- Any claim that a motion is physically safe, and any connection to a Unitree robot.
+
 ## Not in this phase
 
-- MuJoCo, contact forces, friction, or balance. Kinematic reach is not physical stability.
 - Unitree SDK, network connection, or any command sent to a physical robot. The Robot workspace stays disabled.
-- Moving the body or solving the rear legs to extend the drawing reach.
+- Moving the body or solving the rear legs in the kinematic preview to extend the drawing reach.
 - SVG export, G-code, or any file handed from p5.js to the robot.
 - New drawing examples.
-
-### Later MuJoCo adapter
-
-`createKinematicAdapter()` is the current `SimulationAdapter`. A MuJoCo WebAssembly adapter should implement the same interface, subscribe to the same frame, and replace this object. It should not sample `motion(t)`, start a clock, or require changes to sketches, `MotionFrame`, the timeline, or navigation. Joint angles are computed inside the adapter, after `applyFrame` receives canvas-space targets. Physics remains the only place contact may be treated as real. Motion diagnostics stay on the kinematic solve. A physics adapter would not turn those charts into force, balance, or a safety result. A threaded WASM build needs cross-origin isolation; those headers stay off until that adapter exists.
 
 ## Limitations
 
@@ -105,7 +118,9 @@ Motion diagnostics sit in Simulate, under the shared timeline. They describe how
 - The default sheet is 0.20 m × 0.20 m, centred 0.30 m in front of the body. Some of the seven scores fall outside the front legs at that scale. That is reported as unreachable. The scores are not reshaped to fit.
 - The reachability overlay samples a grid. A cell is the reach of its centre. The boundary between colours is that grid, not a continuous outline of the workspace.
 - Motion diagnostics call `motion(t)` without redrawing. A sketch whose motion reads the canvas can disagree with the painted frame. The included scores are functions of time. The derivative of a jump is an estimate on the sample grid, not a measured motor speed.
-- Paint in the viewport is geometric proximity, not contact physics. A lifted move does not leave a mark.
+- Paint in the kinematic viewport is geometric proximity, not contact physics. A lifted move does not leave a mark. MuJoCo contacts are a separate experiment and are not paint.
+- Physics keeps up with the shared clock only as fast as 16 steps per turn. A long seek shows a replaying or integrating state until the model has been stepped to that time. Playback faster than the step budget lags behind the clock instead of skipping the fall.
+- A motion function that reads the canvas can disagree with a physics pose. Physics does not read `motion(t)`.
 - The 3D trail keeps at most 6000 samples. A continuous score longer than that drops the oldest marks. A seek across more than 120 seconds still rebuilds only the latest 120 seconds of the drawing, and the trail follows that rebuild.
 
 ## Run
@@ -117,7 +132,7 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, checks the reachability map, and checks motion diagnostics. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
+`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, checks the reachability map, checks motion diagnostics, and checks the MuJoCo load, gravity, contacts, and replay. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
 
 Sketches persist in `localStorage` under the prefix `doodog`. Clearing site data removes them. Built-in examples are not stored; **Use example** copies one into the library.
 

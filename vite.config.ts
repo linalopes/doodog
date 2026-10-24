@@ -8,12 +8,14 @@ export default defineConfig({
     port: 5173,
   },
   /**
-   * Phase 02+ note: MuJoCo WebAssembly builds that use threads need
-   * SharedArrayBuffer, which requires cross-origin isolation:
+   * The physics experiment uses the single-threaded `@mujoco/mujoco` build.
+   * That build does not need SharedArrayBuffer, so these headers stay off:
    *   Cross-Origin-Opener-Policy: same-origin
    *   Cross-Origin-Embedder-Policy: require-corp
-   * Those headers are deliberately not enabled yet because they also restrict
-   * third-party resources (fonts, the sandboxed iframe's srcdoc assets). They
-   * will be introduced together with the physics adapter.
+   * The multi-threaded build (`@mujoco/mujoco/mt`) would require them. They
+   * would also block Google Fonts and can stop the sandboxed p5 iframe from
+   * loading its classic script. Do not enable them for the single-thread build.
    */
+  worker: { format: 'es' },
+  optimizeDeps: { exclude: ['@mujoco/mujoco'] },
 });
