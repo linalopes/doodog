@@ -23,7 +23,7 @@ Interaction reference: [Plotter Workspace](https://github.com/linalopes/SchoolAI
 
 - Svelte 5, TypeScript, and Vite application shell.
 - Branded header, workspace tabs (Create, Simulate, Robot), and authorship footer. Personal authorship and institutional context are separate credits.
-- **Create:** sketch library stored in this browser, CodeMirror editor, Run and Stop, sandboxed p5.js preview, one editable generative example (*Two-brush Lissajous*), and a reserved parameter panel.
+- **Create:** sketch library stored in this browser, CodeMirror editor, Run and Stop, sandboxed p5.js preview, seven examples (six timed adaptations of the Plotter Workspace studies, plus *Two-brush Lissajous*), and a reserved parameter panel.
 - **Simulate:** viewport, playback controls, and timeline reserved for Phase 02. Controls are disabled. There is no placeholder robot and no fake motion.
 - **Robot:** overview, connection, and safety sections. Connect is disabled. There is no transport and no motion command.
 - Shared motion types (`BrushTarget`, `MotionFrame`) and a single timeline store. Adapter interfaces for a future simulation and a future Go2 controller exist as types only. Nothing implements them.
@@ -46,7 +46,7 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs Svelte and TypeScript checks. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
+`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)` and checks the shared frame shape. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
 
 Sketches persist in `localStorage` under the prefix `doodog`. Clearing site data removes them. Built-in examples are not stored; **Use example** copies one into the library.
 
@@ -107,7 +107,7 @@ type BrushTarget = { x: number; y: number; contact: boolean };
 type MotionFrame = { time: number; left: BrushTarget; right: BrushTarget };
 ```
 
-`x` and `y` are canvas units from `createCanvas`. Mapping those units onto the robot’s reachable workspace is an adapter’s job, not the sketch’s. The example and the blank sketch already follow this shape: `motion(t)` returns a frame, and `draw()` paints it.
+`x` and `y` are canvas units from `createCanvas`. Mapping those units onto the robot’s reachable workspace is an adapter’s job, not the sketch’s. The examples and the blank sketch already follow this shape: `motion(t)` returns a frame, and `draw()` paints it. The example scores are creative trajectories. They are not clipped or rescaled to an assumed Go2 reach.
 
 Phase 02 will make the host timeline the only clock:
 
@@ -120,6 +120,30 @@ Phase 02 will make the host timeline the only clock:
 No stage writes SVG or JSON for the next stage to import. Parameters, once the reserved panel is connected, will be another host message (`SET_PARAMS`) into the same iframe, so the preview, the simulation, and the robot share one set of values.
 
 The protocol comments in `src/lib/p5/protocol.ts` name these messages. They are not implemented yet.
+
+## Example library
+
+The gallery lists seven immutable templates. **Use example** copies one into the local sketch library and does not replace sketches already stored. A first visit still seeds an editable copy of **Two-brush Lissajous** (`two-brush-lissajous`).
+
+Six examples adapt studies from [Plotter Workspace](https://github.com/linalopes/SchoolAI-plotter-workspace). In that project they are static `noLoop()` drawings, captured afterward as SVG. Here the same constructions — Cartesian lines, a grid of loops, concentric radii, sine rows, a noise field, an ordered vertex list — are schedules for a brush. `t` is seconds. Each score has a finite period. The last segment travels, with the brush up, back to the first pose, so a repeat does not jump.
+
+The preview paints a mark only when the brush stays in contact for two consecutive frames. Lifted travel draws nothing. A filled dot is the brush while it draws; an outline is the brush while it is up. The six adapted scores use one brush. The other rests, lifted, in the corner. `params.brush` swaps which one draws. **Two-brush Lissajous** is the original studio example and still draws with both.
+
+| Example | Score |
+| --- | --- |
+| Simple Line | Draw the main diagonal, hold, lift, and return along it. |
+| Grid | Vertical strokes, then horizontal strokes, lifting between lines. |
+| Concentric Circles | One full turn per radius, then a lifted step outward. |
+| Wave Lines | Sine rows. Amplitude, frequency, spacing, and phase sit in `params`. |
+| Noise Field | Short marks on a grid. The angle comes from deterministic noise. Travel between marks is lifted. |
+| Polyline Composition | Quad, open sine, rectangle, and circle, walked vertex to vertex, with holds on the corners and lifts between shapes. |
+| Two-brush Lissajous | Both brushes, unchanged. |
+
+The plotter noise field used p5 Perlin noise and `noiseSeed(42)`. This score uses a small value-noise function with that same seed, called from `motion(t)`, so the field does not depend on p5 setup. It will not match the plotter SVG stroke for stroke. The schedule is the same idea: nested loops, a short segment, brush up between segments.
+
+The polyline vertices are the plotter composition written on the 600 canvas. That file used a 400 canvas; each coordinate here is one and a half times the original. That places the drawing in the studio preview. It is not a fit to the robot.
+
+Editable values live in the `params` object at the top of each sketch. The parameter panel does not write them yet. `npm test` evaluates `motion(t)` for every example in Node. That check is not the Phase 02 host protocol; the running preview still calls `motion` from p5’s `draw()`.
 
 ## Technical risks
 

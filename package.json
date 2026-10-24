@@ -17,7 +17,8 @@
     "dev": "vite",
     "build": "node scripts/sync-sketch-vendor.mjs && vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "test": "node --experimental-strip-types scripts/audit-examples.mjs"
   },
   "engines": {
     "node": ">=20.19"

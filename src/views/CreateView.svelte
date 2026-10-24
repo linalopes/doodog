@@ -379,7 +379,7 @@
   {:else if !$activeSketch}
     <div class="panel panel--soft empty-stage">
       <h2>No sketch selected</h2>
-      <p>Create a new sketch or use the built-in example to begin.</p>
+      <p>Create a new sketch or use a built-in example to begin.</p>
       <div class="btn-row">
         <button type="button" class="btn btn--primary" onclick={() => void handleNewSketch()}>
           New sketch

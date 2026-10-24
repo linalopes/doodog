@@ -96,7 +96,9 @@ let initialSketches = loadSketches();
 // example so the editor has something meaningful to show. Later visits with
 // an empty list stay empty — deleting everything is a valid state.
 if (initialSketches.length === 0 && !wasBootstrapped()) {
-  const example = SKETCH_EXAMPLES[0];
+  // Seed the original two-brush study even if the gallery lists the
+  // adapted plotter scores first.
+  const example = getExampleById('two-brush-lissajous') ?? SKETCH_EXAMPLES[0];
   if (example) {
     const now = Date.now();
     initialSketches = [

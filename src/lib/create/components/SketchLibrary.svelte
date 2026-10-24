@@ -66,7 +66,7 @@
     <p class="library__local mono">Saved locally in this browser</p>
 
     {#if sketches.length === 0}
-      <p class="library__empty muted">No sketches yet. Create one or use the example.</p>
+      <p class="library__empty muted">No sketches yet. Create one or use an example.</p>
     {:else}
       <ul class="library__list" role="list">
         {#each sketches as sketch (sketch.id)}
