@@ -1,41 +1,61 @@
 <script lang="ts">
-  import { timeline, timelineProgress } from '../../motion/timeline';
+  import { seek, timeline } from '../../motion/timeline';
+  import { scrubMaximum } from '../../motion/timelineMath';
   import { formatSeconds } from '../../utils/misc';
 
   /**
-   * Timeline scrubber. Reserved: renders the shared timeline store but is not
-   * interactive until motion frames exist.
+   * Scrubber for the shared timeline. A declared period is the range.
+   * Continuous playback uses a moving window; that window is not a score length.
    */
-  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  interface Props {
+    lanes?: boolean;
+  }
+
+  let { lanes = true }: Props = $props();
+
+  const maximum = $derived(scrubMaximum($timeline));
+  const finite = $derived($timeline.durationSeconds !== null && $timeline.durationSeconds > 0);
 </script>
 
-<div class="timeline" aria-label="Timeline (reserved)">
+<div class="timeline" aria-label="Timeline">
   <div class="timeline__header">
     <span class="section-label">Timeline</span>
-    <span class="mono timeline__time">{formatSeconds($timeline.time)}</span>
+    <span class="mono timeline__time">
+      {formatSeconds($timeline.time)}
+      {#if !finite}
+        · window {formatSeconds(maximum)}
+      {/if}
+    </span>
   </div>
-  <div
-    class="timeline__track"
-    role="slider"
-    aria-valuemin="0"
-    aria-valuemax="100"
-    aria-valuenow={Math.round(($timelineProgress ?? 0) * 100)}
-    aria-disabled="true"
-    tabindex="-1"
-  >
-    <div class="timeline__fill" style={`width: ${($timelineProgress ?? 0) * 100}%`}></div>
-    {#each ticks as tick (tick)}
-      <span class="timeline__tick" style={`left: ${tick * 100}%`}></span>
-    {/each}
-    <span class="timeline__head" style={`left: ${($timelineProgress ?? 0) * 100}%`}></span>
-  </div>
-  <div class="timeline__lanes" aria-hidden="true">
-    <div class="timeline__lane"><span class="timeline__lane-label">Left brush</span></div>
-    <div class="timeline__lane"><span class="timeline__lane-label">Right brush</span></div>
-  </div>
+  <input
+    class="timeline__range"
+    type="range"
+    min="0"
+    max={maximum}
+    step="0.01"
+    value={$timeline.time}
+    aria-label="Seek in the score"
+    aria-valuemin={0}
+    aria-valuemax={maximum}
+    aria-valuenow={$timeline.time}
+    aria-valuetext={formatSeconds($timeline.time)}
+    oninput={(event) => {
+      const next = Number(event.currentTarget.value);
+      if (Number.isFinite(next)) seek(next);
+    }}
+  />
+  {#if lanes}
+    <div class="timeline__lanes" aria-hidden="true">
+      <div class="timeline__lane"><span class="timeline__lane-label">Left brush</span></div>
+      <div class="timeline__lane"><span class="timeline__lane-label">Right brush</span></div>
+    </div>
+  {/if}
   <p class="help-text">
-    Brush contact segments will be drawn on these lanes once the sketch runtime exposes
-    <code>motion(t)</code> to the host.
+    {#if finite}
+      Drag to seek. Moving backward redraws the score from the start, so later marks disappear.
+    {:else}
+      This score did not declare <code>scorePeriod()</code>. The scrubber is a window onto the clock, not a score length.
+    {/if}
   </p>
 </div>
 
@@ -54,45 +74,17 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
+    gap: var(--space-2);
   }
 
   .timeline__time {
     font-size: 12px;
   }
 
-  .timeline__track {
-    position: relative;
-    height: 10px;
-    border-radius: 999px;
-    background: var(--color-surface);
-    overflow: visible;
-    opacity: 0.8;
-  }
-
-  .timeline__fill {
-    position: absolute;
-    inset: 0 auto 0 0;
-    border-radius: 999px;
-    background: var(--brand-pink);
-  }
-
-  .timeline__tick {
-    position: absolute;
-    top: -3px;
-    width: 1px;
-    height: 16px;
-    background: var(--color-border-strong);
-  }
-
-  .timeline__head {
-    position: absolute;
-    top: -3px;
-    width: 16px;
-    height: 16px;
-    margin-left: -8px;
-    border-radius: 50%;
-    background: var(--brand-white);
-    border: 2px solid var(--brand-deep-purple);
+  .timeline__range {
+    width: 100%;
+    margin: 0;
+    accent-color: var(--brand-pink);
   }
 
   .timeline__lanes {

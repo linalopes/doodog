@@ -57,8 +57,8 @@
   {#if current === 'overview'}
     <EmptyState
       tag="Reserved"
-      title="Physical robot control is out of scope for Phase 01"
-      description="This workspace will connect to a Unitree Go2 and stream the same motion frames that drive the simulation. Nothing here can connect, send commands, or move the robot today."
+      title="Physical robot control is not in this phase"
+      description="The kinematic preview is in Simulate. Nothing here can connect, send commands, or move a Unitree Go2."
       seed={41}
     >
       <div class="callout callout--tint">

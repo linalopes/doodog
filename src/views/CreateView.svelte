@@ -8,6 +8,11 @@
   import ParametersPanel from '../lib/create/components/ParametersPanel.svelte';
   import PreviewPanel, { type PreviewStatus } from '../lib/create/components/PreviewPanel.svelte';
   import SketchLibrary from '../lib/create/components/SketchLibrary.svelte';
+  import MotionReadout from '../lib/components/MotionReadout.svelte';
+  import { clearMotionOutput } from '../lib/motion/output';
+  import { seek, setPlayState, timeline } from '../lib/motion/timeline';
+  import PlaybackControls from '../lib/simulate/components/PlaybackControls.svelte';
+  import Timeline from '../lib/simulate/components/Timeline.svelte';
   import {
     createRunSnapshot,
     type RunSnapshot,
@@ -84,8 +89,14 @@
     if (starting || previewStatus === 'starting') return 'Starting';
     if (previewStatus === 'error') return 'Error';
     if (previewStatus === 'timeout') return 'Timed out';
-    if (previewStatus === 'stale') return 'Running · source changed';
-    if (previewStatus === 'live') return 'Running';
+    if (previewStatus === 'stale') {
+      return $timeline.playState === 'playing' ? 'Playing · source changed' : 'Paused · source changed';
+    }
+    if (previewStatus === 'live') {
+      if ($timeline.playState === 'playing') return 'Playing';
+      if ($timeline.playState === 'paused') return 'Paused';
+      return 'Stopped';
+    }
     if (previewStatus === 'stopped') return 'Stopped';
     if (saveState === 'saving') return 'Saving';
     if (saveState === 'modified') return 'Modified';
@@ -111,11 +122,22 @@
   }
 
   function stopRun(reason = 'Stopped.') {
+    setPlayState('paused');
+    seek(0);
     runner?.stop(reason);
+    clearMotionOutput();
     activeRun = null;
     liveRun = null;
     starting = false;
   }
+
+  // The host clock is the only time the live sketch hears. One sample is in
+  // flight inside the runner; this effect just names the latest time.
+  $effect(() => {
+    const time = $timeline.time;
+    if (!isLive || !runner) return;
+    runner.requestTime(time);
+  });
 
   /** Selection transaction: flush edits → stop run → replace editor → reset preview. */
   function applySketchSelection(sketchId: string, source: string, name: string) {
@@ -187,6 +209,9 @@
     sketchError = null;
     logs = [];
     previewStatus = 'starting';
+    setPlayState('paused');
+    seek(0);
+    clearMotionOutput();
 
     try {
       const outcome = await runner.run(snapshot);
@@ -196,6 +221,8 @@
         liveRun = { sketchId: snapshot.sketchId, sourceHash: snapshot.sourceHash };
         previewStatus = 'live';
         if (outcome.canvas) runtimeCanvas = outcome.canvas;
+        seek(0);
+        setPlayState('playing');
         return;
       }
       if (outcome.state === 'timeout') {
@@ -425,6 +452,12 @@
         <span class="stage__meta mono">{canvasLabel}</span>
       </div>
 
+      <div class="stage__transport">
+        <PlaybackControls />
+        <Timeline lanes={false} />
+      </div>
+      <MotionReadout />
+
       <ParametersPanel />
 
       <div class="stage__split" bind:this={splitEl} style={`--editor-ratio: ${splitRatio}`}>
@@ -459,9 +492,10 @@
       </div>
 
       <p class="help-text">
-        The sketch runs in an isolated sandbox with p5.js in global mode. Describe motion in
-        <code>motion(t)</code> and draw it in <code>draw()</code>; the robot simulation will read the
-        same function in a later phase.
+        The sketch runs in an isolated sandbox with p5.js in global mode. The timeline above is the
+        only clock: play, pause, and seek drive <code>draw()</code> through <code>millis()</code> and
+        sample <code>motion(t)</code> for Simulate. Declare <code>scorePeriod()</code> to loop a finite
+        score. Without it, playback is continuous. Coordinates stay in canvas units.
       </p>
     </div>
   {/if}
@@ -513,6 +547,14 @@
     flex: none;
   }
 
+  .stage__transport {
+    display: grid;
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+    gap: var(--space-2);
+    align-items: start;
+    flex: none;
+  }
+
   .stage__title {
     border: 0;
     background: transparent;
@@ -543,7 +585,8 @@
     padding: 2px 8px;
   }
 
-  .stage__chip[data-tone='live'] {
+  .stage__chip[data-tone='live'],
+  .stage__chip[data-tone='paused'] {
     border-color: var(--brand-turquoise);
     background: var(--brand-turquoise);
     color: var(--brand-deep-purple);
@@ -643,6 +686,10 @@
     .stage__meta {
       margin-left: 0;
       width: 100%;
+    }
+
+    .stage__transport {
+      grid-template-columns: 1fr;
     }
   }
 </style>

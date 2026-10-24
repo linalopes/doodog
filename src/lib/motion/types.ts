@@ -7,8 +7,9 @@
  * JSON files: a sketch defines motion as a function of time, and every
  * consumer samples that same function through the same timeline.
  *
- * These are initial interfaces and are expected to be refined in Phase 02
- * once the Three.js viewport exists. Fields are kept minimal on purpose.
+ * Phase 02A samples this model from the sketch iframe. The Three.js adapter
+ * consumes the same frame later. Fields stay in canvas space on purpose:
+ * joint angles are an adapter concern.
  */
 
 /**
@@ -44,8 +45,18 @@ export type BrushSide = 'left' | 'right';
 export type MotionFunction = (time: number) => MotionFrame;
 
 /**
+ * Why a sample could not produce a frame.
+ * `missing` — the sketch has no `motion` function. The preview can still draw.
+ * `invalid` — the return value failed the finite-coordinate checks.
+ * `threw` — `motion(t)` raised.
+ */
+export type SketchMotionErrorCode = 'missing' | 'invalid' | 'threw';
+
+/**
  * Static description of a motion program, independent of any renderer.
- * `durationSeconds` is `null` for programs that loop forever.
+ * `durationSeconds` is one looping period. `null` means the score did not
+ * declare `scorePeriod()` and playback is continuous — the host does not
+ * invent a length.
  */
 export type MotionProgramInfo = {
   durationSeconds: number | null;

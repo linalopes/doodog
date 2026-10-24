@@ -8,8 +8,10 @@ import type { SketchExample } from './types';
  * The studio convention they follow is `motion(t)` → frame → draw.
  *
  * Six scores adapt the static Plotter Workspace studies (loops, coordinates,
- * sine rows, noise marks, vertex lists) into timed brush travel. The
- * Two-brush Lissajous example is unchanged.
+ * sine rows, noise marks, vertex lists) into timed brush travel. Each of those
+ * defines `scorePeriod()`, and the host loops that many seconds. Lissajous
+ * keeps its original motion and does not define `scorePeriod()`, so its
+ * playback is continuous.
  */
 
 const SCORE_RUNTIME = `// The other brush stays lifted. Change params.brush to 'right' to swap.
@@ -92,6 +94,8 @@ function sampleScore(t, segments) {
   return poseOn(segments[0], 0);
 }
 
+// Host timeline: a positive finite return value is one loop. Omit this
+// function, or return anything else, and playback stays continuous.
 function scorePeriod() {
   const segments = buildScore();
   let period = 0;
@@ -548,6 +552,7 @@ const params = {
 let trail;
 let previous = null;
 
+// No scorePeriod(): playback is continuous and time is not wrapped.
 // The parametric motion model. Pure: same t, same frame.
 function motion(t) {
   const cx = width / 2;

@@ -2,11 +2,12 @@
  * Default source for an explicit New sketch action.
  *
  * It already follows the studio convention: a `motion(t)` function returns a
- * MotionFrame-shaped object and `draw()` renders it. Phase 01 only renders it
- * in 2D; later phases will sample the same function for the robot.
+ * MotionFrame-shaped object and `draw()` renders it. There is no
+ * `scorePeriod()`, so the shared timeline plays it continuously.
  */
 export const BLANK_SKETCH_SOURCE = `// New sketch — describe where each brush should be at time t,
 // then draw it. Run to preview.
+// No scorePeriod(): playback is continuous. Add scorePeriod() to loop.
 
 function motion(t) {
   return {

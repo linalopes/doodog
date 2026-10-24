@@ -3,36 +3,42 @@
   import Sidebar from '../lib/components/Sidebar.svelte';
   import type { SidebarSection } from '../lib/components/types';
   import { APP_CONFIG } from '../lib/config';
+  import KinematicSession from '../lib/simulate/components/KinematicSession.svelte';
   import PlaybackControls from '../lib/simulate/components/PlaybackControls.svelte';
+  import RobotModelPanel from '../lib/simulate/components/RobotModelPanel.svelte';
   import SimulationStage from '../lib/simulate/components/SimulationStage.svelte';
   import Timeline from '../lib/simulate/components/Timeline.svelte';
   import { timeline } from '../lib/motion/timeline';
   import { simulateSection } from '../lib/stores/navigation';
 
   /**
-   * Simulate workspace — reserved for the Three.js Go2 visualisation.
-   * Layout and controls exist so Phase 02 fills the viewport without
-   * reorganising the page. Nothing moves in Phase 01.
+   * Simulate workspace. Playback writes the same timeline Create uses.
+   * The viewport poses a kinematic Unitree Go2 from the latest MotionFrame.
+   * MuJoCo and the physical robot are not part of this view.
    */
   const SECTIONS: SidebarSection[] = [
-    { id: 'viewport', label: 'Viewport', hint: 'Phase 02' },
-    { id: 'robot-model', label: 'Robot model', hint: 'Phase 02' },
+    { id: 'viewport', label: 'Viewport', hint: 'Live' },
+    { id: 'robot-model', label: 'Robot model', hint: 'Go2' },
     { id: 'physics', label: 'Physics', hint: 'Later' },
   ];
 
-  const META: Record<string, { title: string; description: string }> = {
+  const META: Record<string, { title: string; description: string; tag: string }> = {
     viewport: {
       title: 'Simulate the robot',
       description:
-        'Preview how the sketch’s brush motion translates into the articulated legs of the Unitree Go2.',
+        'The shared timeline poses a kinematic Unitree Go2 from the sketch’s motion(t). This is a geometric preview, not a physics simulation.',
+      tag: 'Preview',
     },
     'robot-model': {
       title: 'Robot model',
-      description: 'Dimensions, joint limits, and brush mount positions used by the simulation.',
+      description:
+        'Joint limits from the Go2 model, brush mounts, and the painting surface. These controls do not leave the browser.',
+      tag: 'Inspection',
     },
     physics: {
       title: 'Physics',
-      description: 'MuJoCo WebAssembly adapter for contact and balance — not part of Phase 01.',
+      description: 'MuJoCo is not running. Reachability here is kinematic only and does not imply balance or contact.',
+      tag: 'Not implemented',
     },
   };
 
@@ -43,6 +49,7 @@
 </script>
 
 <div class="workspace">
+<KinematicSession />
 <Sidebar title="Simulate" sections={SECTIONS} active={current} onSelect={(id) => simulateSection.set(id)}>
   {#snippet bottom()}
     <p class="section-label">Shared timeline</p>
@@ -55,7 +62,11 @@
   {/snippet}
 </Sidebar>
 
-<MainSection title={meta?.title ?? 'Simulate'} description={meta?.description} tag="Not implemented">
+<MainSection
+  title={meta?.title ?? 'Simulate'}
+  description={meta?.description}
+  tag={meta?.tag ?? 'Not implemented'}
+>
   {#snippet actions()}
     <span class="badge badge--outline">{APP_CONFIG.robot.name}</span>
   {/snippet}
@@ -72,21 +83,15 @@
       </div>
     </div>
   {:else if current === 'robot-model'}
-    <div class="panel panel--soft">
-      <h2>Robot model</h2>
-      <p class="muted">
-        Phase 02 will load the Unitree Go2 geometry and joint limits here. Legs:
-        {APP_CONFIG.robot.legs.join(', ')}. Brush mounts are planned on the two front legs, which
-        correspond to the <code>left</code> and <code>right</code> brush targets of the motion model.
-      </p>
-    </div>
+    <RobotModelPanel />
   {:else}
     <div class="panel panel--soft">
       <h2>Physics</h2>
       <p class="muted">
-        A MuJoCo WebAssembly adapter is planned behind the same <code>SimulationAdapter</code>
-        interface as the kinematic preview. It will need cross-origin isolation headers for
-        SharedArrayBuffer; see the README for the dependency notes.
+        The kinematic adapter already implements <code>SimulationAdapter</code>. A MuJoCo
+        WebAssembly adapter can replace it later without changing sketches, <code>MotionFrame</code>,
+        or the timeline. It is not included. Reachability in the viewport is not contact, friction,
+        or balance.
       </p>
     </div>
   {/if}
@@ -106,7 +111,7 @@
     flex-direction: column;
     gap: var(--space-3);
     flex: 1 1 auto;
-    min-height: 0;
+    min-height: min-content;
   }
 
   .layout__controls {

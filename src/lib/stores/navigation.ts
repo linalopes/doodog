@@ -12,10 +12,10 @@ export const TAB_LABELS: Record<PrimaryTab, string> = {
   robot: 'Robot',
 };
 
-/** Availability shown next to each tab. Only Create is functional in Phase 01. */
+/** Availability shown next to each tab. Robot stays reserved. */
 export const TAB_STATUS: Record<PrimaryTab, 'available' | 'planned'> = {
   create: 'available',
-  simulate: 'planned',
+  simulate: 'available',
   robot: 'planned',
 };
 

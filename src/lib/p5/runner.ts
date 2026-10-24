@@ -1,3 +1,5 @@
+import { publishMotionSample } from '../motion/output';
+import { publishMotionSamples } from '../motion/trail';
 import { createId } from '../utils/misc';
 import { hashSource } from '../sketches/sourceHash';
 import { buildRuntimeSrcdoc } from './iframeBootstrap';
@@ -9,6 +11,7 @@ import {
   type RuntimeMessage,
   type SketchErrorPhase,
 } from './protocol';
+import { createSamplePump, type SamplePump } from './samplePump';
 
 /**
  * Host-side sketch controller.
@@ -28,6 +31,9 @@ export const SKETCH_RUNTIME_ASSETS = {
 } as const;
 
 export const DEFAULT_START_TIMEOUT_MS = 10_000;
+
+/** A lost reply must not leave playback waiting on a sample forever. */
+const MOTION_SAMPLE_TIMEOUT_MS = 8_000;
 
 export interface RunnerError {
   message: string;
@@ -296,10 +302,19 @@ export class SketchRunner {
   #events: RunnerEvents;
   #frame: RuntimeFrame | null = null;
   #activeRun: RunSnapshot | null = null;
+  #sampleTimer = 0;
+  #pump: SamplePump;
 
   constructor(container: HTMLElement, events: RunnerEvents) {
     this.#host = container;
     this.#events = events;
+    this.#pump = createSamplePump((time, serial) => {
+      const run = this.#activeRun;
+      const frame = this.#frame;
+      if (!run || !frame) return;
+      this.#armSampleTimer(serial);
+      frame.post({ type: 'SET_TIME', runId: run.runId, time, serial });
+    });
     this.#ensureFrame();
   }
 
@@ -311,11 +326,21 @@ export class SketchRunner {
    * Runs an immutable snapshot until it reaches a terminal start state.
    * `live` means the sketch produced its first frame and is now animating.
    */
+  /**
+   * Ask the live sketch to redraw at `time` and return one `motion(t)` sample.
+   * Later requests replace a sample that has not been sent yet.
+   */
+  requestTime(time: number): void {
+    if (!this.#activeRun || !this.#frame) return;
+    this.#pump.request(time);
+  }
+
   async run(
     snapshot: RunSnapshot,
     options: { timeoutMs?: number } = {},
   ): Promise<RunOutcome> {
     const timeoutMs = options.timeoutMs ?? DEFAULT_START_TIMEOUT_MS;
+    this.#resetSampling();
     this.#activeRun = snapshot;
     const base = {
       runId: snapshot.runId,
@@ -348,11 +373,13 @@ export class SketchRunner {
   }
 
   stop(reason = 'Run stopped.'): void {
+    this.#resetSampling();
     this.#activeRun = null;
     this.#frame?.stop(reason);
   }
 
   dispose(): void {
+    this.#resetSampling();
     this.#activeRun = null;
     this.#frame?.dispose();
     this.#frame = null;
@@ -371,7 +398,53 @@ export class SketchRunner {
     this.#ensureFrame();
   }
 
+  #resetSampling(): void {
+    window.clearTimeout(this.#sampleTimer);
+    this.#sampleTimer = 0;
+    this.#pump.reset();
+  }
+
+  #armSampleTimer(serial: number): void {
+    window.clearTimeout(this.#sampleTimer);
+    this.#sampleTimer = window.setTimeout(() => {
+      const runId = this.#activeRun?.runId;
+      if (!runId) return;
+      if (!this.#pump.expire(serial)) return;
+      publishMotionSample({
+        runId,
+        frame: null,
+        errorCode: 'timeout',
+        errorMessage: 'The sketch did not return a motion sample in time.',
+        durationSeconds: null,
+        canvas: null,
+      });
+    }, MOTION_SAMPLE_TIMEOUT_MS);
+  }
+
   #handleMessage(message: RuntimeMessage): void {
+    if (message.type === 'MOTION_FRAME') {
+      if (message.runId !== this.#activeRun?.runId) return;
+      if (!this.#pump.acknowledge(message.serial)) return;
+      if (!this.#pump.isInFlight()) window.clearTimeout(this.#sampleTimer);
+      const width = message.canvasWidth;
+      const height = message.canvasHeight;
+      publishMotionSample({
+        runId: message.runId,
+        frame: message.frame,
+        errorCode: message.errorCode,
+        errorMessage: message.errorMessage,
+        durationSeconds: message.durationSeconds,
+        canvas:
+          width !== null && height !== null && width > 0 && height > 0
+            ? { width, height }
+            : null,
+      });
+      if (!message.errorCode && message.frame) {
+        const samples = message.samples?.filter((sample) => sample) ?? [];
+        publishMotionSamples(samples.length > 0 ? samples : [message.frame]);
+      }
+      return;
+    }
     if (message.type === 'SKETCH_ERROR') {
       this.#events.onError(message.runId, {
         message: message.message,

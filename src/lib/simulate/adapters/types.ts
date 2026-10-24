@@ -1,14 +1,16 @@
 import type { MotionFrame, MotionProgramInfo } from '../../motion/types';
 
 /**
- * Simulation adapter boundary (interfaces only in Phase 01).
+ * Simulation adapter boundary (interfaces only).
  *
- * The Simulate workspace will talk to the robot model through this interface
- * so the Three.js kinematic preview (Phase 02) and a MuJoCo WebAssembly
- * physics adapter (later) are interchangeable. Both receive the same
- * MotionFrame stream from the shared timeline; neither reads sketch source.
+ * Phase 02A publishes one validated MotionFrame at a time on
+ * `src/lib/motion/output.ts`. Phase 02B's first adapter should subscribe to
+ * that store and call `applyFrame` with `frame`. Do not sample `motion(t)`
+ * again, do not start a second clock, and do not convert canvas units into
+ * joint angles before `applyFrame`. A later MuJoCo adapter implements this
+ * same interface. Neither adapter reads sketch source.
  *
- * Nothing in this file is instantiated yet. There is no fake motion.
+ * Nothing in this file is instantiated. There is no fake motion.
  */
 
 export type SimulationBackend = 'three-kinematic' | 'mujoco-wasm';

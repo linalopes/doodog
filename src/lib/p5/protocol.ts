@@ -3,21 +3,20 @@
  * runtime iframe.
  *
  * The host never evaluates sketch source. The iframe never receives host
- * stores or (in later phases) robot handles.
+ * stores or robot handles. `SET_TIME` carries one host time. The iframe
+ * redraws up to that time, calls `motion(t)` and `scorePeriod()` there, and
+ * answers with one `MOTION_FRAME`. The host keeps a single sample in flight.
  *
- * Planned extension (Phase 02, not implemented here): the host will add
- *   HostMessage    'SET_TIME'      { runId, time }            — timeline → sketch
- *   HostMessage    'SAMPLE_MOTION' { runId, times: number[] } — bake frames
- *   HostMessage    'SET_PARAMS'    { runId, params }          — parameter panel
- *   RuntimeMessage 'MOTION_FRAMES' { runId, frames: MotionFrame[] }
- *   RuntimeMessage 'MOTION_INFO'   { runId, durationSeconds, canvas }
- * so that the same `motion(t)` the sketch draws with is sampled for the robot
- * without any SVG or JSON export step. See README → Architecture.
+ * Still unused, reserved for later:
+ *   HostMessage 'SET_PARAMS' { runId, params } — parameter panel
  */
+
+import { isMotionFrame, type MotionFrame, type SketchMotionErrorCode } from '../motion/types.ts';
 
 export type HostMessage =
   | { type: 'RUN_SKETCH'; runId: string; source: string }
-  | { type: 'STOP_SKETCH'; runId: string };
+  | { type: 'STOP_SKETCH'; runId: string }
+  | { type: 'SET_TIME'; runId: string; time: number; serial: number };
 
 export type SketchErrorPhase = 'loading' | 'setup' | 'draw' | 'runtime';
 
@@ -42,7 +41,26 @@ export type RuntimeMessage =
       stack?: string;
       phase?: SketchErrorPhase;
     }
-  | { type: 'RUNTIME_LOG'; runId: string; level: RuntimeLogLevel; values: string[] };
+  | { type: 'RUNTIME_LOG'; runId: string; level: RuntimeLogLevel; values: string[] }
+  | {
+      type: 'MOTION_FRAME';
+      runId: string;
+      serial: number;
+      /** Null when `motion(t)` is missing, invalid, or threw. */
+      frame: MotionFrame | null;
+      errorCode: SketchMotionErrorCode | null;
+      errorMessage: string | null;
+      /** Positive period, or null when the sketch does not declare one. */
+      durationSeconds: number | null;
+      canvasWidth: number | null;
+      canvasHeight: number | null;
+      /**
+       * Frames the iframe evaluated while redrawing this request.
+       * More than one sample means the host should replace its trail.
+       * Omitted on older messages.
+       */
+      samples?: MotionFrame[] | null;
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -50,6 +68,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNullableFinite(value: unknown): boolean {
+  return value === null || isFiniteNumber(value);
+}
+
+function isMotionErrorCode(value: unknown): value is SketchMotionErrorCode | null {
+  return value === null || value === 'missing' || value === 'invalid' || value === 'threw';
+}
+
+const MAX_MOTION_SAMPLES = 320;
+
+function isSampleList(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!Array.isArray(value) || value.length > MAX_MOTION_SAMPLES) return false;
+  return value.every((entry) => isMotionFrame(entry));
 }
 
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
@@ -84,6 +122,18 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
         (value.level === 'log' || value.level === 'warn' || value.level === 'error') &&
         Array.isArray(value.values) &&
         value.values.every((entry) => typeof entry === 'string')
+      );
+    case 'MOTION_FRAME':
+      return (
+        isNonEmptyString(value.runId) &&
+        isFiniteNumber(value.serial) &&
+        (value.frame === null || isMotionFrame(value.frame)) &&
+        isMotionErrorCode(value.errorCode) &&
+        (value.errorMessage === null || typeof value.errorMessage === 'string') &&
+        isNullableFinite(value.durationSeconds) &&
+        isNullableFinite(value.canvasWidth) &&
+        isNullableFinite(value.canvasHeight) &&
+        isSampleList(value.samples)
       );
     default:
       return false;

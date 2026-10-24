@@ -1,9 +1,9 @@
 /**
  * Samples every built-in score outside the sketch iframe.
  *
- * The host still does not call motion(t). This audit evaluates the example
- * source in a sandbox with the studio canvas size so the shared MotionFrame
- * contract can be checked before Phase 02.
+ * The running app samples motion(t) inside the sketch iframe. This audit
+ * evaluates the example source in a sandbox with the studio canvas size so
+ * the shared MotionFrame contract can be checked without a browser.
  */
 import assert from 'node:assert/strict';
 import vm from 'node:vm';

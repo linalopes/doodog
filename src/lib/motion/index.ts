@@ -4,9 +4,11 @@ export type {
   MotionFrame,
   MotionFunction,
   MotionProgramInfo,
+  SketchMotionErrorCode,
 } from './types';
 export { isBrushTarget, isMotionFrame } from './types';
 export {
+  advanceTimeline,
   resetTimeline,
   seek,
   setDuration,
@@ -19,3 +21,5 @@ export {
   type PlayState,
   type TimelineState,
 } from './timeline';
+export { clearMotionOutput, motionOutput, publishMotionSample } from './output';
+export type { MotionOutputState, MotionSampleErrorCode, MotionSampleEvent } from './output';
