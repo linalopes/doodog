@@ -31,7 +31,7 @@
     viewport: {
       title: 'Simulate the robot',
       description:
-        'The shared timeline poses a kinematic Unitree Go2 from the sketch’s motion(t). This is a geometric preview, not a physics simulation.',
+        'The shared timeline poses a kinematic Unitree Go2 from the sketch’s motion(t). MuJoCo can replace that preview with a physics experiment. The kinematic pose stays geometric.',
       tag: 'Preview',
     },
     'robot-model': {
@@ -43,7 +43,7 @@
     physics: {
       title: 'Physics',
       description:
-        'An optional MuJoCo experiment. The Go2 can fall under gravity. Brush paths are not tracked, and nothing here is a safety result.',
+        'An optional MuJoCo experiment. Motors Off lets the Go2 fall. A torque controller can try a three-leg stance. Nothing here is a safety result.',
       tag: 'Experimental',
     },
   };

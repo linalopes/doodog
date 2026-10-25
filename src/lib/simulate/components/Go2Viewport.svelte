@@ -92,6 +92,7 @@
     view.setHelpers(config.showGrid, config.showFrames);
     view.setBrushes(config.brushes.left, config.brushes.right);
     const physics = $simulationBackend === 'mujoco' ? $physicsRun.snapshot : null;
+    const experiment = $simulationBackend === 'mujoco' ? $physicsRun.experiment : null;
     let marks: TrailMark[] = [];
     if (physics) {
       if (pose) view.setPaper(pose);
@@ -100,15 +101,24 @@
         basePosition: physics.basePosition,
         baseQuaternion: physics.baseQuaternion,
       });
+      view.setPhysicsGuide({
+        support: physics.support.polygon,
+        triangle: $physicsRun.mode === 'three-leg' ? physics.support.threeLegTriangle : [],
+        com: physics.support.com,
+        flTarget: experiment?.flTarget ?? null,
+      });
       if (!trailsHidden) {
         view.setMarks([]);
         trailsHidden = true;
       }
     } else if (pose) {
       trailsHidden = false;
+      view.setPhysicsGuide(null);
       view.setPose(pose);
       marks = syncMarks(trail, canvas, config);
       view.setMarks(marks);
+    } else {
+      view.setPhysicsGuide(null);
     }
     let unreachable = 0;
     for (const mark of marks) {
@@ -124,6 +134,19 @@
   const pose = $derived($kinematicPose);
   const physicsSelected = $derived($simulationBackend === 'mujoco');
   const physicsLive = $derived(physicsSelected && $physicsRun.snapshot !== null);
+  const experiment = $derived(physicsLive ? $physicsRun.experiment : null);
+  const controlled = $derived(experiment !== null && experiment.mode !== 'motors-off');
+
+  const STAGE_LABEL: Record<string, string> = {
+    idle: 'Idle',
+    posture: 'Posture hold',
+    stand: 'Stand',
+    shift: 'Shift',
+    lift: 'Lift',
+    hold: 'Hold',
+    return: 'Return',
+    done: 'Finished',
+  };
 </script>
 
 <div class="viewport">
@@ -131,15 +154,17 @@
 
   <div class="viewport__overlay">
     <p class="viewport__banner">{physicsLive ? PHYSICS_LABEL : PREVIEW_LABEL}</p>
-    {#if physicsLive}
+    {#if physicsLive && $physicsRun.snapshot}
       <p class="viewport__note">
-        Zero torque. The robot may fall. Contacts are from MuJoCo. This is not a safe path, and geometric paint is hidden.
+        {#if controlled && experiment}
+          {STAGE_LABEL[experiment.stage] ?? experiment.stage}. Torque PD. Contacts and the centre of mass are measured. The dark marker is the requested front-left target. This is not a safe path, and geometric paint is hidden.
+        {:else}
+          Zero torque. The robot may fall. Contacts are from MuJoCo. This is not a safe path, and geometric paint is hidden.
+        {/if}
       </p>
-      {#if $physicsRun.snapshot}
-        <p class="mono viewport__reach">
-          base z {$physicsRun.snapshot.basePosition[2].toFixed(3)} m · {$physicsRun.snapshot.contactCount} contacts · t {$physicsRun.snapshot.time.toFixed(2)} s
-        </p>
-      {/if}
+      <p class="mono viewport__reach">
+        base z {$physicsRun.snapshot.basePosition[2].toFixed(3)} m · roll {(($physicsRun.snapshot.rollRad * 180) / Math.PI).toFixed(1)}° · pitch {(($physicsRun.snapshot.pitchRad * 180) / Math.PI).toFixed(1)}° · FL clearance {($physicsRun.snapshot.feet.FL.clearanceM * 1000).toFixed(0)} mm · t {$physicsRun.snapshot.time.toFixed(2)} s
+      </p>
     {:else}
       <p class="viewport__note">
         Geometric preview of paint. A reachable pose is not dynamically safe, and contact is not a physics result.
@@ -217,7 +242,14 @@
         Frames
       </button>
     </div>
-    {#if !physicsLive}
+    {#if physicsLive}
+      <p class="viewport__legend">
+        <span><i class="swatch swatch--achieved"></i> Measured support</span>
+        <span><i class="swatch swatch--desired"></i> FR–RL–RR triangle</span>
+        <span><i class="swatch swatch--paint"></i> Centre of mass</span>
+        <span><i class="swatch swatch--target"></i> FL target</span>
+      </p>
+    {:else}
       <p class="viewport__legend">
         <span><i class="swatch swatch--desired"></i> Desired</span>
         <span><i class="swatch swatch--achieved"></i> Achieved tip</span>
@@ -350,6 +382,13 @@
 
   .swatch--paint {
     background: var(--brand-pink);
+  }
+
+  .swatch--target {
+    width: 8px;
+    height: 8px;
+    border: 2px solid var(--brand-deep-purple);
+    background: transparent;
   }
 
   .viewport__status {

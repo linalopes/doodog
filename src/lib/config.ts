@@ -25,8 +25,8 @@ export const APP_CONFIG = {
 
   /** Current development phase, shown in the shell. */
   phase: {
-    id: '05A',
-    label: 'Phase 05A · MuJoCo physics foundation',
+    id: '05B',
+    label: 'Phase 05B · Three-leg stance',
   },
 
   /**

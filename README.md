@@ -4,12 +4,12 @@
 
 **doodog studio — A creative coding environment for robotic drawing.**
 
-doodog is the artistic project. doodog studio is the creative coding application: p5.js for parametric drawing, and Three.js for a kinematic view of those movements on a Unitree Go2. MuJoCo physics and physical robot control are later phases.
+doodog is the artistic project. doodog studio is the creative coding application: p5.js for parametric drawing, Three.js for a kinematic view of those movements on a Unitree Go2, and an optional MuJoCo experiment. Physical robot control is not in this phase.
 
 Repository: [linalopes/doodog](https://github.com/linalopes/doodog)  
 Package identifier: `doodog`
 
-**Phase 05A · MuJoCo physics foundation.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. Simulate can chart the joint motion of a score. An optional MuJoCo experiment can drop the same Go2 under gravity. The kinematic view stays labeled **Kinematic Preview — Not Physically Validated**. The physics view is labeled **MuJoCo Physics — Experimental**. The physical robot is not in this phase.
+**Phase 05B · Three-leg stance.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. Simulate can chart the joint motion of a score. An optional MuJoCo experiment can drop the same Go2 under gravity, hold the home posture, or try to stand on three legs while the front-left foot lifts. The kinematic view stays labeled **Kinematic Preview — Not Physically Validated**. The physics view is labeled **MuJoCo Physics — Experimental**. The physical robot is not in this phase.
 
 Concept, interaction design and development: [Lina Lopes](https://linalopes.info/)
 
@@ -89,15 +89,29 @@ MuJoCo is an optional experiment. The kinematic adapter is unchanged, and `apply
 
 - The package is the official single-threaded `@mujoco/mujoco` build (Apache-2.0). It does not use `SharedArrayBuffer`, so the app does not send `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. The multi-threaded build would need those headers. They would block the Google Fonts stylesheet and can stop the sandboxed p5 iframe from loading its script, so they stay off.
 - WASM loads in a worker the first time the artist chooses Initialize. Opening Create, running a sketch, or viewing the kinematic preview does not load the physics engine.
-- The worker reads the vendored Menagerie `go2.xml` and its OBJ meshes. That file is the Unitree model (BSD-3-Clause, HangZhou YuShu TECHNOLOGY CO.,LTD. / Unitree Robotics). It has no ground. The loader includes it and adds a plane named `floor`. The vendored XML is not rewritten. The home posture already meets that plane, so contact can be reported before any step. Motor commands are cleared to 0 Nm after the home keyframe, because those `ctrl` numbers are crouched joint angles and these actuators are torque motors. There is no balance controller. If the robot falls, that is the simulated result.
+- The worker reads the vendored Menagerie `go2.xml` and its OBJ meshes. That file is the Unitree model (BSD-3-Clause, HangZhou YuShu TECHNOLOGY CO.,LTD. / Unitree Robotics). It has no ground. The loader includes it and adds a plane named `floor`. The vendored XML is not rewritten. The home posture already meets that plane, so contact can be reported before any step. Motor commands are cleared to 0 Nm after the home keyframe, because those `ctrl` numbers are crouched joint angles and these actuators are torque motors. Motors Off leaves them at 0 Nm. If the robot falls, that is the simulated result.
 - The host timeline stays the clock the artist sees. Physics time advances by the model timestep (0.002 s) toward the time since Initialize or Reset. At most 16 steps run before the page can paint again. Seeking backward inside the run resets the model and replays it. Seeking before the run is refused, and the pose is not jumped. Play and pause are the shared timeline controls.
 - The existing Three.js Go2 is moved by the simulated base pose and joint angles. It is not a second robot. Geometric paint is hidden while the physics pose is showing. Switching back to Kinematic Preview restores the fixed-body pose and does not change the sketch or its parameters.
 - Motion diagnostics, the reachability map, and the seven sketches stay on the kinematic solve.
 
-### Still for Phase 05B
+## Implemented in Phase 05B
+
+Three-Leg Stance is a second physics mode. Motors Off is unchanged: zero torque, and the creative timeline still drives that fall. Posture Hold and Three-Leg Stance do not follow the creative clock. Their clock is physics experiment time, and it advances only while the experiment is playing. Seeking the score does not rewind a pose the controller has moved. Reset returns the Menagerie home posture and clears the motor commands.
+
+The actuators in `go2.xml` are `<motor>` elements, so the command is torque in Nm, not a joint position. The home keyframe’s `ctrl` numbers stay unused. A joint-space PD law writes the torques. Commands are clamped to the ctrlrange in that file, about ±23.7 Nm on the hip actuators and ±45.43 Nm on the knees. That range is the model file, not a certified continuous-torque rating. The PD gains are simulation settings. The controller does not write `qpos`.
+
+The schedule is Stand, Shift, Lift, Hold, Return. Stand holds the home joints. Shift moves the body toward the centroid of the FR–RL–RR triangle, with the feet kept at the pose captured at the end of Stand. Lift raises the front-left foot. The requested height is clearance of the foot sphere above the floor. The home posture starts with that sphere inside the floor, so the foot has to climb out of the penetration as well as reach the clearance. Hold keeps the foot up. Return lowers it and shifts the body back. The default request is 15 mm, with two seconds for each of shift, lift, hold, and return. Stand is one second and is not a slider.
+
+Completed is not “the animation reached Return.” Every stage has a measurement: four feet down and the body upright after Stand, the centre-of-mass projection at least 5 mm inside the FR–RL–RR triangle after Shift, the front-left foot off the floor and at least halfway to the requested clearance after Lift and throughout Hold, and four feet down again after Return. A projection inside the triangle is not dynamic stability and it is not a safety result. If the body falls or tips, the schedule stops and the outcome is Failed. Stop, Reset, and a mode change report Interrupted or return to the home posture instead of jumping the state.
+
+In the automated MuJoCo check, with the default 15 mm request, the run completes: the front-left foot leaves the floor and clears it by about 12 mm, the three-leg margin during the hold is about 70 mm, roll and pitch stay within a few degrees, body height stays near 0.26 m, and the largest command stays near 11 Nm, inside the MJCF ranges. The foot comes back down on Return. Posture Hold keeps four feet down at about the home height. Motors Off still falls. Those are simulation results for this model and these gains, not a guarantee on another machine and not a claim about a physical Go2.
+
+The same Three.js robot draws the simulated body. The turquoise loop is the convex hull of the feet that are actually on the floor. The dark loop is the FR–RL–RR triangle. The pink mark is the measured centre of mass and its projection. The dark marker above the front-left foot is the requested target, not the measured foot. Geometric paint stays hidden. Switching back to Kinematic Preview restores the fixed-body pose and does not change the sketch.
+
+### Still later
 
 - Dynamic tracking of a p5.js brush trajectory.
-- A balance or locomotion controller.
+- Walking, or a balance controller beyond this stance.
 - Real brush contact and paint deposition.
 - Any claim that a motion is physically safe, and any connection to a Unitree robot.
 
@@ -121,6 +135,9 @@ MuJoCo is an optional experiment. The kinematic adapter is unchanged, and `apply
 - Paint in the kinematic viewport is geometric proximity, not contact physics. A lifted move does not leave a mark. MuJoCo contacts are a separate experiment and are not paint.
 - Physics keeps up with the shared clock only as fast as 16 steps per turn. A long seek shows a replaying or integrating state until the model has been stepped to that time. Playback faster than the step budget lags behind the clock instead of skipping the fall.
 - A motion function that reads the canvas can disagree with a physics pose. Physics does not read `motion(t)`.
+- While Posture Hold or Three-Leg Stance is selected, the creative timeline does not move the robot. Physics experiment time is separate. A seek on the score is not a physics rewind.
+- The default 15 mm lift is a clearance request. The home posture begins with the foot sphere inside the floor, so part of the motion is spent climbing out of that contact. The check’s completed run cleared about 12 mm, which meets the halfway rule and is not the full 15 mm.
+- The support margin is a static measurement. It does not certify that the stance will survive a push, a faster lift, or a different gain.
 - The 3D trail keeps at most 6000 samples. A continuous score longer than that drops the oldest marks. A seek across more than 120 seconds still rebuilds only the latest 120 seconds of the drawing, and the trail follows that rebuild.
 
 ## Run
@@ -132,7 +149,7 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, checks the reachability map, checks motion diagnostics, and checks the MuJoCo load, gravity, contacts, and replay. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
+`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, checks the reachability map, checks motion diagnostics, checks the MuJoCo load, gravity, contacts, and replay, and checks the stance geometry, torque clamp, posture hold, and three-leg schedule. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
 
 Sketches persist in `localStorage` under the prefix `doodog`. Clearing site data removes them. Built-in examples are not stored; **Use example** copies one into the library.
 

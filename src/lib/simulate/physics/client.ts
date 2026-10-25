@@ -5,6 +5,8 @@
  * therefore `@mujoco/mujoco`, is created on the first `load()`.
  */
 
+import type { ExperimentView, PhysicsMode } from './experiment.ts';
+import type { ExperimentConfig } from './settings.ts';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
 
 interface Success {
@@ -12,6 +14,7 @@ interface Success {
   ok: true;
   snapshot: PhysicsSnapshot;
   info?: PhysicsModelInfo;
+  experiment: ExperimentView;
 }
 
 interface Failure {
@@ -25,12 +28,25 @@ type Reply = Success | Failure;
 export interface PhysicsLoad {
   info: PhysicsModelInfo;
   snapshot: PhysicsSnapshot;
+  experiment: ExperimentView;
+}
+
+export interface PhysicsStep {
+  snapshot: PhysicsSnapshot;
+  experiment: ExperimentView;
 }
 
 export interface PhysicsClient {
   load(): Promise<PhysicsLoad>;
-  reset(): Promise<PhysicsSnapshot>;
+  reset(): Promise<PhysicsStep>;
   step(count: number): Promise<PhysicsSnapshot>;
+  configure(config: ExperimentConfig): Promise<ExperimentView>;
+  setMode(mode: PhysicsMode): Promise<ExperimentView>;
+  start(): Promise<PhysicsStep>;
+  pause(): Promise<PhysicsStep>;
+  resume(): Promise<PhysicsStep>;
+  stop(): Promise<PhysicsStep>;
+  tick(steps: number): Promise<PhysicsStep>;
   dispose(): void;
 }
 
@@ -57,7 +73,7 @@ export function createPhysicsClient(): PhysicsClient {
     return worker;
   }
 
-  function request(message: { type: 'load' } | { type: 'reset' } | { type: 'step'; count: number }): Promise<Success> {
+  function request(message: Record<string, unknown>): Promise<Success> {
     const id = nextId;
     nextId += 1;
     return new Promise((resolve, reject) => {
@@ -66,17 +82,42 @@ export function createPhysicsClient(): PhysicsClient {
     });
   }
 
+  function stepOf(reply: Success): PhysicsStep {
+    return { snapshot: reply.snapshot, experiment: reply.experiment };
+  }
+
   return {
     async load(): Promise<PhysicsLoad> {
       const reply = await request({ type: 'load' });
       if (!reply.info) throw new Error('MuJoCo did not return the Go2 model description.');
-      return { info: reply.info, snapshot: reply.snapshot };
+      return { info: reply.info, snapshot: reply.snapshot, experiment: reply.experiment };
     },
-    async reset(): Promise<PhysicsSnapshot> {
-      return (await request({ type: 'reset' })).snapshot;
+    async reset(): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'reset' }));
     },
     async step(count: number): Promise<PhysicsSnapshot> {
       return (await request({ type: 'step', count })).snapshot;
+    },
+    async configure(config: ExperimentConfig): Promise<ExperimentView> {
+      return (await request({ type: 'experiment', action: 'configure', config })).experiment;
+    },
+    async setMode(mode: PhysicsMode): Promise<ExperimentView> {
+      return (await request({ type: 'experiment', action: 'mode', mode })).experiment;
+    },
+    async start(): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'experiment', action: 'start' }));
+    },
+    async pause(): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'experiment', action: 'pause' }));
+    },
+    async resume(): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'experiment', action: 'resume' }));
+    },
+    async stop(): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'experiment', action: 'stop' }));
+    },
+    async tick(steps: number): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'experiment', action: 'tick', steps }));
     },
     dispose(): void {
       if (!worker) return;

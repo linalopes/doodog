@@ -18,7 +18,7 @@
     "build": "node scripts/sync-sketch-vendor.mjs && vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "test": "node --experimental-strip-types scripts/audit-examples.mjs && node --experimental-strip-types scripts/audit-timeline.mjs && node --experimental-strip-types scripts/audit-kinematics.mjs && node --experimental-strip-types scripts/audit-params.mjs && node --experimental-strip-types scripts/audit-reachability.mjs && node --experimental-strip-types scripts/audit-diagnostics.mjs && node --experimental-strip-types scripts/audit-physics.mjs"
+    "test": "node --experimental-strip-types scripts/audit-examples.mjs && node --experimental-strip-types scripts/audit-timeline.mjs && node --experimental-strip-types scripts/audit-kinematics.mjs && node --experimental-strip-types scripts/audit-params.mjs && node --experimental-strip-types scripts/audit-reachability.mjs && node --experimental-strip-types scripts/audit-diagnostics.mjs && node --experimental-strip-types scripts/audit-physics.mjs && node --experimental-strip-types scripts/audit-stance.mjs"
   },
   "engines": {
     "node": ">=20.19"

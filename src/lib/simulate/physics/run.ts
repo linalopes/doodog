@@ -1,9 +1,10 @@
 /**
- * Host-clock follower for the physics experiment.
+ * Host-clock follower for motors-off physics, and the stance experiment clock.
  *
- * The creative timeline is not replaced. Initialize anchors physics at the
- * current host time and loads WASM. Later host times are integrated. Earlier
- * times inside the run are replayed from the reference posture.
+ * The creative timeline is not replaced. Motors Off integrates toward that
+ * clock from the reference posture. Posture Hold and Three-Leg Stance use
+ * physics experiment time instead, and only while they are playing. Seeking
+ * the score does not rewind a pose the controller has moved.
  */
 
 import { get } from 'svelte/store';
@@ -11,6 +12,8 @@ import { seek, setPlayState, timeline } from '../../motion/timeline.ts';
 import { selectSimulationBackend, simulationBackend } from './backend.ts';
 import { planPhysicsAdvance, physicsRequestedTime } from './clock.ts';
 import { createPhysicsClient, type PhysicsClient } from './client.ts';
+import type { ExperimentView, PhysicsMode } from './experiment.ts';
+import { DEFAULT_EXPERIMENT, EXPERIMENT_STEPS_PER_FRAME, TIMELINE_HOLD_NOTE, type ExperimentConfig } from './settings.ts';
 import { writable } from 'svelte/store';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
 
@@ -26,6 +29,12 @@ export interface PhysicsRunState {
   timestep: number;
   info: PhysicsModelInfo | null;
   snapshot: PhysicsSnapshot | null;
+  mode: PhysicsMode;
+  config: ExperimentConfig;
+  experiment: ExperimentView | null;
+  /** True after Start until Reset. The creative clock must not move this pose. */
+  controllerUsed: boolean;
+  timelineFollow: boolean;
 }
 
 export const INITIAL_PHYSICS_RUN: PhysicsRunState = {
@@ -38,6 +47,11 @@ export const INITIAL_PHYSICS_RUN: PhysicsRunState = {
   timestep: 0,
   info: null,
   snapshot: null,
+  mode: 'motors-off',
+  config: DEFAULT_EXPERIMENT,
+  experiment: null,
+  controllerUsed: false,
+  timelineFollow: true,
 };
 
 export const physicsRun = writable<PhysicsRunState>(INITIAL_PHYSICS_RUN);
@@ -46,16 +60,30 @@ let client: PhysicsClient | null = null;
 let generation = 0;
 let pumping = false;
 let queued = false;
+let ticking = false;
+let attached = false;
+let raf = 0;
 
 export function attachPhysicsDirector(): () => void {
   client = createPhysicsClient();
+  attached = true;
   const stopClock = timeline.subscribe(() => {
     void pump();
   });
   const stopBackend = simulationBackend.subscribe(() => {
     void pump();
   });
+  const loop = () => {
+    if (!attached) return;
+    raf = requestAnimationFrame(() => {
+      void experimentFrame();
+      loop();
+    });
+  };
+  loop();
   return () => {
+    attached = false;
+    if (raf) cancelAnimationFrame(raf);
     stopClock();
     stopBackend();
     generation += 1;
@@ -63,6 +91,7 @@ export function attachPhysicsDirector(): () => void {
     client = null;
     pumping = false;
     queued = false;
+    ticking = false;
     physicsRun.set(INITIAL_PHYSICS_RUN);
   };
 }
@@ -80,25 +109,38 @@ export async function initializePhysics(): Promise<void> {
   if (!current) return;
   selectSimulationBackend('mujoco');
   const ticket = ++generation;
+  const mode = get(physicsRun).mode;
+  const config = get(physicsRun).config;
   physicsRun.update((state) => ({
     ...state,
     status: 'loading',
     error: '',
     notice: 'Loading MuJoCo and the Unitree Go2 model.',
+    controllerUsed: false,
   }));
   try {
     const loaded = await current.load();
     if (ticket !== generation) return;
+    let experiment = loaded.experiment;
+    if (mode !== 'motors-off') experiment = await current.setMode(mode);
+    if (ticket !== generation) return;
+    experiment = await current.configure(config);
+    if (ticket !== generation) return;
     physicsRun.set({
       status: 'ready',
       error: '',
-      notice: 'Reference posture. Motor commands are 0 Nm. No balance controller is running.',
+      notice: 'Reference posture. Motor commands are 0 Nm until a controller is started.',
       activity: 'holding',
       epoch: get(timeline).time,
       integrated: loaded.snapshot.time,
       timestep: loaded.info.timestep,
       info: loaded.info,
       snapshot: loaded.snapshot,
+      mode,
+      config: experiment.config,
+      experiment,
+      controllerUsed: false,
+      timelineFollow: mode === 'motors-off',
     });
     void pump();
   } catch (error) {
@@ -119,14 +161,17 @@ export async function resetPhysics(): Promise<void> {
   const ticket = ++generation;
   setPlayState('paused');
   try {
-    const snapshot = await current.reset();
+    const result = await current.reset();
     if (ticket !== generation) return;
     physicsRun.update((state) => ({
       ...state,
       epoch: get(timeline).time,
-      integrated: snapshot.time,
-      snapshot,
+      integrated: result.snapshot.time,
+      snapshot: result.snapshot,
+      experiment: result.experiment,
       activity: 'holding',
+      controllerUsed: false,
+      timelineFollow: state.mode === 'motors-off',
       notice: 'Reset to the reference posture. Motor commands are 0 Nm.',
     }));
   } catch (error) {
@@ -142,10 +187,144 @@ export async function resetPhysics(): Promise<void> {
 /** Move the shared timeline forward by one physics step, then let the director integrate. */
 export function stepPhysicsOnce(): void {
   const run = get(physicsRun);
-  if (run.status !== 'ready' || !(run.timestep > 0)) return;
+  if (run.status !== 'ready' || !(run.timestep > 0) || !run.timelineFollow) return;
   const clock = get(timeline);
   setPlayState('paused');
   seek(clock.time + run.timestep);
+}
+
+export async function setPhysicsMode(mode: PhysicsMode): Promise<void> {
+  physicsRun.update((state) => ({
+    ...state,
+    mode,
+    timelineFollow: mode === 'motors-off' && !state.controllerUsed,
+  }));
+  const current = client;
+  if (!current || get(physicsRun).status !== 'ready') return;
+  const ticket = ++generation;
+  try {
+    const experiment = await current.setMode(mode);
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({
+      ...state,
+      experiment,
+      notice: experiment.reason || state.notice,
+    }));
+  } catch (error) {
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({
+      ...state,
+      status: 'error',
+      error: error instanceof Error ? error.message : 'The controller mode could not be changed.',
+    }));
+  }
+}
+
+export async function configureExperiment(config: ExperimentConfig): Promise<void> {
+  physicsRun.update((state) => ({ ...state, config }));
+  const current = client;
+  if (!current || get(physicsRun).status !== 'ready') return;
+  try {
+    const experiment = await current.configure(config);
+    physicsRun.update((state) => ({ ...state, experiment, config: experiment.config }));
+  } catch (error) {
+    physicsRun.update((state) => ({
+      ...state,
+      status: 'error',
+      error: error instanceof Error ? error.message : 'The experiment settings could not be saved.',
+    }));
+  }
+}
+
+export async function startExperiment(): Promise<void> {
+  const current = client;
+  const run = get(physicsRun);
+  if (!current || run.status !== 'ready' || run.mode === 'motors-off') return;
+  const ticket = ++generation;
+  try {
+    const result = await current.start();
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({
+      ...state,
+      controllerUsed: true,
+      timelineFollow: false,
+      snapshot: result.snapshot,
+      experiment: result.experiment,
+      notice: result.experiment.reason,
+      activity: 'holding',
+    }));
+  } catch (error) {
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({
+      ...state,
+      status: 'error',
+      error: error instanceof Error ? error.message : 'The experiment could not start.',
+    }));
+  }
+}
+
+export async function pauseExperiment(): Promise<void> {
+  await sendPlayback('pause');
+}
+
+export async function resumeExperiment(): Promise<void> {
+  await sendPlayback('resume');
+}
+
+export async function stopExperiment(): Promise<void> {
+  await sendPlayback('stop');
+}
+
+async function sendPlayback(action: 'pause' | 'resume' | 'stop'): Promise<void> {
+  const current = client;
+  if (!current || get(physicsRun).status !== 'ready') return;
+  const ticket = ++generation;
+  try {
+    const result = await current[action]();
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({
+      ...state,
+      snapshot: result.snapshot,
+      experiment: result.experiment,
+      notice: result.experiment.reason || state.notice,
+    }));
+  } catch (error) {
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({
+      ...state,
+      status: 'error',
+      error: error instanceof Error ? error.message : 'The experiment control failed.',
+    }));
+  }
+}
+
+async function experimentFrame(): Promise<void> {
+  if (ticking || !client) return;
+  const run = get(physicsRun);
+  if (run.status !== 'ready' || run.experiment?.playback !== 'playing') return;
+  ticking = true;
+  const ticket = generation;
+  try {
+    const result = await client.tick(EXPERIMENT_STEPS_PER_FRAME);
+    if (ticket !== generation || !client) return;
+    physicsRun.update((state) => ({
+      ...state,
+      snapshot: result.snapshot,
+      experiment: result.experiment,
+      integrated: result.snapshot.time,
+      notice: result.experiment.reason,
+      activity: result.experiment.playback === 'playing' ? 'integrating' : 'holding',
+    }));
+  } catch (error) {
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({
+      ...state,
+      status: 'error',
+      error: error instanceof Error ? error.message : 'Physics step failed.',
+    }));
+  } finally {
+    ticking = false;
+  }
 }
 
 async function pump(): Promise<void> {
@@ -162,6 +341,12 @@ async function pump(): Promise<void> {
       const backend = get(simulationBackend);
       const run = get(physicsRun);
       if (backend !== 'mujoco' || run.status !== 'ready' || run.epoch === null) break;
+      if (!run.timelineFollow) {
+        if (run.controllerUsed && run.mode === 'motors-off' && run.notice !== TIMELINE_HOLD_NOTE) {
+          physicsRun.update((state) => ({ ...state, activity: 'holding', notice: TIMELINE_HOLD_NOTE }));
+        }
+        break;
+      }
       const requested = physicsRequestedTime(get(timeline).time, run.epoch);
       const plan = planPhysicsAdvance({ integrated: run.integrated, timestep: run.timestep }, requested);
       if (plan.action === 'blocked') {
@@ -187,7 +372,7 @@ async function pump(): Promise<void> {
             : 'Integrating fixed steps toward the shared timeline.',
       }));
       let snapshot: PhysicsSnapshot | null = null;
-      if (plan.action === 'replay') snapshot = await current.reset();
+      if (plan.action === 'replay') snapshot = (await current.reset()).snapshot;
       if (ticket !== generation) return;
       if (plan.steps > 0) snapshot = await current.step(plan.steps);
       if (ticket !== generation || !snapshot) return;
@@ -197,9 +382,7 @@ async function pump(): Promise<void> {
         snapshot,
         integrated: snapshot.time,
         activity: caughtUp ? 'holding' : plan.action === 'replay' ? 'replaying' : 'integrating',
-        notice: caughtUp
-          ? 'Physics time matches the shared timeline. Motor commands are 0 Nm.'
-          : state.notice,
+        notice: caughtUp ? 'Physics time matches the shared timeline. Motor commands are 0 Nm.' : state.notice,
       }));
       if (!caughtUp) queued = true;
     } while (queued);

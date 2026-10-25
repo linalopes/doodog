@@ -37,6 +37,14 @@ export interface PhysicsMeshPose {
   baseQuaternion: QuatWxyz;
 }
 
+/** Measured support and the requested front-left target. Empty arrays hide a mark. */
+export interface PhysicsGuide {
+  support: readonly Vec3[];
+  triangle: readonly Vec3[];
+  com: Vec3 | null;
+  flTarget: Vec3 | null;
+}
+
 export interface Go2View {
   readonly ready: Promise<void>;
   setPose(snapshot: PoseSnapshot): void;
@@ -44,6 +52,8 @@ export interface Go2View {
   setPaper(snapshot: PoseSnapshot): void;
   /** Body pose and joint angles from MuJoCo. Does not move the paper or the paint. */
   setPhysicsPose(pose: PhysicsMeshPose): void;
+  /** Support polygon, centre of mass, and the requested foot target. */
+  setPhysicsGuide(guide: PhysicsGuide | null): void;
   setMarks(marks: readonly TrailMark[]): void;
   setHelpers(grid: boolean, frames: boolean): void;
   setBrushes(left: BrushMount, right: BrushMount): void;
@@ -165,8 +175,23 @@ export function createGo2View(
     achievedRight: makeLine(0x08f2db, false),
     paintLeft: makeLine(0x22113e, false),
     paintRight: makeLine(0xea7dff, false),
+    support: makeLine(0x08f2db, false),
+    triangle: makeLine(0x22113e, true),
+    com: makeLine(0xea7dff, false),
+    target: makeLine(0x22113e, true),
   };
   for (const line of Object.values(lines)) scene.add(line);
+  const comDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xea7dff }),
+  );
+  const targetDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x22113e }),
+  );
+  comDot.visible = false;
+  targetDot.visible = false;
+  scene.add(comDot, targetDot);
 
   const legs: Partial<Record<LegId, LegNodes>> = {};
 
@@ -265,6 +290,38 @@ export function createGo2View(
     requestRender();
   }
 
+  function setPhysicsGuide(guide: PhysicsGuide | null): void {
+    setSegments(lines.support, guide ? loopPairs(guide.support, 0.004) : []);
+    setSegments(lines.triangle, guide ? loopPairs(guide.triangle, 0.006) : []);
+    if (guide?.com) {
+      comDot.visible = true;
+      comDot.position.set(guide.com[0], guide.com[1], 0.012);
+      setSegments(lines.com, [
+        [
+          [guide.com[0], guide.com[1], guide.com[2]],
+          [guide.com[0], guide.com[1], 0.004],
+        ],
+      ]);
+    } else {
+      comDot.visible = false;
+      setSegments(lines.com, []);
+    }
+    if (guide?.flTarget) {
+      targetDot.visible = true;
+      targetDot.position.set(guide.flTarget[0], guide.flTarget[1], guide.flTarget[2]);
+      setSegments(lines.target, [
+        [
+          [guide.flTarget[0], guide.flTarget[1], guide.flTarget[2]],
+          [guide.flTarget[0], guide.flTarget[1], 0.004],
+        ],
+      ]);
+    } else {
+      targetDot.visible = false;
+      setSegments(lines.target, []);
+    }
+    requestRender();
+  }
+
   function setMarks(marks: readonly TrailMark[]): void {
     const left = trailLines(marks.filter((mark) => mark.side === 'left'));
     const right = trailLines(marks.filter((mark) => mark.side === 'right'));
@@ -297,6 +354,7 @@ export function createGo2View(
     setPose,
     setPaper,
     setPhysicsPose,
+    setPhysicsGuide,
     setMarks,
     setHelpers,
     setBrushes,
@@ -438,6 +496,21 @@ function makeLine(color: number, dashed: boolean): THREE.LineSegments {
   const line = new THREE.LineSegments(new THREE.BufferGeometry(), material);
   line.frustumCulled = false;
   return line;
+}
+
+function loopPairs(points: readonly Vec3[], z: number): Array<[Vec3, Vec3]> {
+  if (points.length < 3) return [];
+  const pairs: Array<[Vec3, Vec3]> = [];
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index];
+    const end = points[(index + 1) % points.length];
+    if (!start || !end) continue;
+    pairs.push([
+      [start[0], start[1], z],
+      [end[0], end[1], z],
+    ]);
+  }
+  return pairs;
 }
 
 function raise(pairs: Array<[Vec3, Vec3]>, amount: number): Array<[Vec3, Vec3]> {
