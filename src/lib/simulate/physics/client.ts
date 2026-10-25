@@ -6,6 +6,7 @@
  */
 
 import type { ExperimentView, PhysicsMode } from './experiment.ts';
+import type { ScoreBuffer } from './score.ts';
 import type { ExperimentConfig } from './settings.ts';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
 
@@ -46,7 +47,9 @@ export interface PhysicsClient {
   pause(): Promise<PhysicsStep>;
   resume(): Promise<PhysicsStep>;
   stop(): Promise<PhysicsStep>;
-  tick(steps: number): Promise<PhysicsStep>;
+  tick(steps: number, rate?: number): Promise<PhysicsStep>;
+  setScore(score: ScoreBuffer): Promise<ExperimentView>;
+  clearScore(): Promise<ExperimentView>;
   dispose(): void;
 }
 
@@ -116,8 +119,14 @@ export function createPhysicsClient(): PhysicsClient {
     async stop(): Promise<PhysicsStep> {
       return stepOf(await request({ type: 'experiment', action: 'stop' }));
     },
-    async tick(steps: number): Promise<PhysicsStep> {
-      return stepOf(await request({ type: 'experiment', action: 'tick', steps }));
+    async tick(steps: number, rate?: number): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'experiment', action: 'tick', steps, rate }));
+    },
+    async setScore(score: ScoreBuffer): Promise<ExperimentView> {
+      return (await request({ type: 'experiment', action: 'score', score })).experiment;
+    },
+    async clearScore(): Promise<ExperimentView> {
+      return (await request({ type: 'experiment', action: 'score' })).experiment;
     },
     dispose(): void {
       if (!worker) return;

@@ -1,25 +1,45 @@
 /**
- * Three-leg stance schedule.
+ * Stance, air-circle, and creative-score schedule.
  *
  * The creative timeline is not this clock. `elapsed` is physics experiment
- * time. Joint commands are torques from the PD law. A stage that finishes
- * its animation is not a success: completion is the measurement checklist.
+ * time. Joint commands are torques from the PD law. Foot targets are solved
+ * from the measured body pose. A creative score arrives as samples; this file
+ * does not evaluate sketch source. Nothing here writes qpos. A stage that
+ * finishes its animation is not a success: completion is the measurement checklist.
  */
 
 import type { Go2JointState } from '../adapters/types.ts';
 import type { Quat, Vec3 } from '../go2/math.ts';
 import { jointPd } from './pd.ts';
 import {
+  circlePoint,
+  circleSamples,
+  pathSpan,
+  rmsError,
+  smootherstep,
+  trackingError,
+  type DrawDirection,
+} from './circle.ts';
+import {
+  mapGesture,
+  sampleScore,
+  splitGesturePaths,
+  trackStageSeconds,
+  type ScoreBuffer,
+  type ScoreChannel,
+  type ScoreKind,
+} from './score.ts';
+import {
   CLOCK_NOTE,
   COMPLETION_NOTE,
   DEFAULT_EXPERIMENT,
+  DRAW_MAX_ERROR_M,
   STANCE_CRITERIA,
   STAND_SECONDS,
   clampConfig,
   type ExperimentConfig,
 } from './settings.ts';
 import { analyticalFoot } from '../go2/kinematics.ts';
-import { quatRotate, sub } from '../go2/math.ts';
 import {
   copyJoints,
   footWorld,
@@ -27,6 +47,7 @@ import {
   limitJointStep,
   minimumShift,
   referenceJoints,
+  worldPointToBody,
 } from './targets.ts';
 import {
   JOINT_ORDER,
@@ -37,9 +58,9 @@ import {
 
 export { CLOCK_NOTE, COMPLETION_NOTE };
 
-export type PhysicsMode = 'motors-off' | 'posture-hold' | 'three-leg';
+export type PhysicsMode = 'motors-off' | 'posture-hold' | 'three-leg' | 'air-draw' | 'score';
 
-export type StanceStage = 'idle' | 'posture' | 'stand' | 'shift' | 'lift' | 'hold' | 'return' | 'done';
+export type StanceStage = 'idle' | 'posture' | 'stand' | 'shift' | 'lift' | 'draw' | 'track' | 'hold' | 'return' | 'done';
 
 export type ExperimentOutcome = 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'interrupted';
 
@@ -47,8 +68,140 @@ export interface StageCriteria {
   stand: boolean | null;
   shift: boolean | null;
   lift: boolean | null;
+  /** Null for experiments that do not draw. */
+  draw: boolean | null;
+  /** Null for experiments that do not track a creative score. */
+  track: boolean | null;
   hold: boolean | null;
   return: boolean | null;
+}
+
+/** The creative trajectory, without the canvas samples, for the panel and the view. */
+export interface ScoreInfo {
+  version: number;
+  runId: string;
+  revision: number;
+  channel: ScoreChannel;
+  ignoredChannel: ScoreChannel;
+  sketchName: string;
+  canvasWidth: number;
+  canvasHeight: number;
+  gestureSizeM: number;
+  scaleM: number;
+  spanWidthM: number;
+  spanHeightM: number;
+  kind: ScoreKind;
+  scoreStart: number;
+  scoreEnd: number;
+  interval: number;
+  widened: boolean;
+  travelPx: number;
+}
+
+/** Measurements while FL follows one creative brush. Contact is metadata only. */
+export interface ScoreTrack {
+  buffer: ScoreBuffer | null;
+  origin: Vec3 | null;
+  holdTarget: Vec3 | null;
+  /** Live rate. Score seconds per physics second. */
+  playbackRate: number;
+  /** Rate captured when Track begins. It fixes the stage length. */
+  entryRate: number;
+  cursor: number;
+  canvasX: number | null;
+  canvasY: number | null;
+  contact: boolean | null;
+  requested: Vec3 | null;
+  measured: Vec3 | null;
+  samples: number;
+  errorSumSq: number;
+  maxErrorM: number;
+  lastErrorM: number | null;
+  minMarginM: number | null;
+  maxAbsRollRad: number;
+  maxAbsPitchRad: number;
+  maxTorqueNm: number;
+  saturated: boolean;
+  unreachable: boolean;
+  held: boolean;
+  finished: boolean;
+  initialReachable: boolean | null;
+  desiredContact: Vec3[][];
+  desiredTravel: Vec3[][];
+  achieved: Vec3[];
+  achievedWidthM: number | null;
+  achievedDepthM: number | null;
+}
+
+export interface ScoreView {
+  info: ScoreInfo | null;
+  playbackRate: number;
+  entryRate: number;
+  cursor: number;
+  canvasX: number | null;
+  canvasY: number | null;
+  contact: boolean | null;
+  requested: Vec3 | null;
+  measured: Vec3 | null;
+  lastErrorM: number | null;
+  maxErrorM: number;
+  rmsErrorM: number | null;
+  minMarginM: number | null;
+  maxAbsRollRad: number;
+  maxAbsPitchRad: number;
+  maxTorqueNm: number;
+  saturated: boolean;
+  unreachable: boolean;
+  held: boolean;
+  finished: boolean;
+  initialReachable: boolean | null;
+  desiredContact: Vec3[][];
+  desiredTravel: Vec3[][];
+  achieved: Vec3[];
+  achievedWidthM: number | null;
+  achievedDepthM: number | null;
+  origin: Vec3 | null;
+}
+
+/** Measurements gathered while the front-left foot is tracing the circle. */
+export interface DrawTrack {
+  anchor: Vec3 | null;
+  radiusM: number;
+  direction: DrawDirection;
+  /** Measured foot-frame height when Draw began. The command stays on the anchor plane. */
+  achievedHeightM: number | null;
+  samples: number;
+  errorSumSq: number;
+  maxErrorM: number;
+  lastErrorM: number | null;
+  /** Lowest FR–RL–RR margin while drawing. Null before the first sample. */
+  minMarginM: number | null;
+  maxAbsRollRad: number;
+  maxAbsPitchRad: number;
+  maxTorqueNm: number;
+  saturated: boolean;
+  unreachable: boolean;
+  /** Support and clearance held on every Draw sample so far. */
+  held: boolean;
+  /** The drawing duration elapsed, so the commanded path made one revolution. */
+  revolution: boolean;
+  /** Requested circle, in the world frame. Not ink. */
+  desired: Vec3[];
+  /** Measured foot frame during Draw. Not ink. */
+  achieved: Vec3[];
+  achievedWidthM: number | null;
+  achievedDepthM: number | null;
+}
+
+/** Extremes over the whole experiment, including the stance stages. */
+export interface ExperimentPeaks {
+  minThreeLegMarginM: number | null;
+  /** Stage in which the lowest three-leg margin was measured. */
+  minMarginStage: StanceStage | null;
+  maxAbsRollRad: number;
+  maxAbsPitchRad: number;
+  maxTorqueNm: number;
+  saturated: boolean;
 }
 
 export interface PlantedStance {
@@ -76,6 +229,9 @@ export interface ExperimentMemory {
   flTarget: Vec3 | null;
   postureHolding: boolean;
   unreachable: LegId[];
+  draw: DrawTrack;
+  score: ScoreTrack;
+  peaks: ExperimentPeaks;
 }
 
 export interface ExperimentView {
@@ -93,6 +249,11 @@ export interface ExperimentView {
   flTarget: Vec3 | null;
   postureHolding: boolean;
   unreachable: LegId[];
+  draw: DrawTrack;
+  score: ScoreView;
+  peaks: ExperimentPeaks;
+  /** Root-mean-square foot-frame error over the Draw samples. Null before Draw. */
+  rmsErrorM: number | null;
 }
 
 export interface TorquePlant {
@@ -106,9 +267,162 @@ const EMPTY_CRITERIA: StageCriteria = {
   stand: null,
   shift: null,
   lift: null,
+  draw: null,
+  track: null,
   hold: null,
   return: null,
 };
+
+const SCORE_SLOT_COUNT = 160;
+
+function emptyScore(): ScoreTrack {
+  return {
+    buffer: null,
+    origin: null,
+    holdTarget: null,
+    playbackRate: 1,
+    entryRate: 0,
+    cursor: 0,
+    canvasX: null,
+    canvasY: null,
+    contact: null,
+    requested: null,
+    measured: null,
+    samples: 0,
+    errorSumSq: 0,
+    maxErrorM: 0,
+    lastErrorM: null,
+    minMarginM: null,
+    maxAbsRollRad: 0,
+    maxAbsPitchRad: 0,
+    maxTorqueNm: 0,
+    saturated: false,
+    unreachable: false,
+    held: true,
+    finished: false,
+    initialReachable: null,
+    desiredContact: [],
+    desiredTravel: [],
+    achieved: [],
+    achievedWidthM: null,
+    achievedDepthM: null,
+  };
+}
+
+function shareScore(track: ScoreTrack): ScoreTrack {
+  return {
+    ...track,
+    origin: track.origin ? copyVec(track.origin) : null,
+    holdTarget: track.holdTarget ? copyVec(track.holdTarget) : null,
+    requested: track.requested ? copyVec(track.requested) : null,
+    measured: track.measured ? copyVec(track.measured) : null,
+  };
+}
+
+function scoreInfo(buffer: ScoreBuffer | null): ScoreInfo | null {
+  if (!buffer) return null;
+  return {
+    version: buffer.version,
+    runId: buffer.runId,
+    revision: buffer.revision,
+    channel: buffer.channel,
+    ignoredChannel: buffer.ignoredChannel,
+    sketchName: buffer.sketchName,
+    canvasWidth: buffer.canvasWidth,
+    canvasHeight: buffer.canvasHeight,
+    gestureSizeM: buffer.gestureSizeM,
+    scaleM: buffer.scaleM,
+    spanWidthM: buffer.spanWidthM,
+    spanHeightM: buffer.spanHeightM,
+    kind: buffer.kind,
+    scoreStart: buffer.scoreStart,
+    scoreEnd: buffer.scoreEnd,
+    interval: buffer.interval,
+    widened: buffer.widened,
+    travelPx: buffer.travelPx,
+  };
+}
+
+function viewScore(track: ScoreTrack): ScoreView {
+  return {
+    info: scoreInfo(track.buffer),
+    playbackRate: track.playbackRate,
+    entryRate: track.entryRate,
+    cursor: track.cursor,
+    canvasX: track.canvasX,
+    canvasY: track.canvasY,
+    contact: track.contact,
+    requested: track.requested ? copyVec(track.requested) : null,
+    measured: track.measured ? copyVec(track.measured) : null,
+    lastErrorM: track.lastErrorM,
+    maxErrorM: track.maxErrorM,
+    rmsErrorM: rmsError(track.errorSumSq, track.samples),
+    minMarginM: track.minMarginM,
+    maxAbsRollRad: track.maxAbsRollRad,
+    maxAbsPitchRad: track.maxAbsPitchRad,
+    maxTorqueNm: track.maxTorqueNm,
+    saturated: track.saturated,
+    unreachable: track.unreachable,
+    held: track.held,
+    finished: track.finished,
+    initialReachable: track.initialReachable,
+    desiredContact: track.desiredContact.map((run) => run.map((point) => copyVec(point))),
+    desiredTravel: track.desiredTravel.map((run) => run.map((point) => copyVec(point))),
+    achieved: track.achieved.map((point) => copyVec(point)),
+    achievedWidthM: track.achievedWidthM,
+    achievedDepthM: track.achievedDepthM,
+    origin: track.origin ? copyVec(track.origin) : null,
+  };
+}
+
+function emptyDraw(): DrawTrack {
+  return {
+    anchor: null,
+    radiusM: 0,
+    direction: 'ccw',
+    achievedHeightM: null,
+    samples: 0,
+    errorSumSq: 0,
+    maxErrorM: 0,
+    lastErrorM: null,
+    minMarginM: null,
+    maxAbsRollRad: 0,
+    maxAbsPitchRad: 0,
+    maxTorqueNm: 0,
+    saturated: false,
+    unreachable: false,
+    held: true,
+    revolution: false,
+    desired: [],
+    achieved: [],
+    achievedWidthM: null,
+    achievedDepthM: null,
+  };
+}
+
+function emptyPeaks(): ExperimentPeaks {
+  return {
+    minThreeLegMarginM: null,
+    minMarginStage: null,
+    maxAbsRollRad: 0,
+    maxAbsPitchRad: 0,
+    maxTorqueNm: 0,
+    saturated: false,
+  };
+}
+
+function copyVec(point: Vec3): Vec3 {
+  return [point[0], point[1], point[2]];
+}
+
+function copyDraw(track: DrawTrack): DrawTrack {
+  return {
+    ...track,
+    anchor: track.anchor ? copyVec(track.anchor) : null,
+    desired: track.desired.map((point) => copyVec(point)),
+    achieved: track.achieved.map((point) => copyVec(point)),
+  };
+}
 
 export function createMemory(config: ExperimentConfig = DEFAULT_EXPERIMENT): ExperimentMemory {
   return {
@@ -127,10 +441,14 @@ export function createMemory(config: ExperimentConfig = DEFAULT_EXPERIMENT): Exp
     flTarget: null,
     postureHolding: false,
     unreachable: [],
+    draw: emptyDraw(),
+    score: emptyScore(),
+    peaks: emptyPeaks(),
   };
 }
 
 export function viewOf(memory: ExperimentMemory): ExperimentView {
+  const draw = copyDraw(memory.draw);
   return {
     mode: memory.mode,
     playback: memory.playback,
@@ -143,9 +461,13 @@ export function viewOf(memory: ExperimentMemory): ExperimentView {
     config: memory.config,
     criteria: { ...memory.criteria },
     targets: memory.targets ? copyJoints(memory.targets) : null,
-    flTarget: memory.flTarget ? [memory.flTarget[0], memory.flTarget[1], memory.flTarget[2]] : null,
+    flTarget: memory.flTarget ? copyVec(memory.flTarget) : null,
     postureHolding: memory.postureHolding,
     unreachable: [...memory.unreachable],
+    draw,
+    score: viewScore(memory.score),
+    peaks: { ...memory.peaks },
+    rmsErrorM: rmsError(draw.errorSumSq, draw.samples),
   };
 }
 
@@ -160,6 +482,9 @@ export function changeMode(memory: ExperimentMemory, mode: PhysicsMode): Experim
   next.targets = null;
   next.flTarget = null;
   next.unreachable = [];
+  next.draw = emptyDraw();
+  next.score = emptyScore();
+  next.score.playbackRate = memory.score.playbackRate;
   if (memory.playback === 'playing' || memory.outcome === 'running' || memory.outcome === 'paused') {
     next.outcome = 'interrupted';
     next.reason = 'The controller mode changed. The physics state was not jumped.';
@@ -183,6 +508,20 @@ export function begin(memory: ExperimentMemory, sample: PhysicsSnapshot): Experi
   next.failure = '';
   next.postureHolding = false;
   next.unreachable = [];
+  next.draw = emptyDraw();
+  next.peaks = emptyPeaks();
+  next.score = emptyScore();
+  next.score.buffer = memory.score.buffer;
+  next.score.playbackRate = memory.score.playbackRate;
+  if (memory.mode === 'score' && !next.score.buffer) {
+    next.playback = 'paused';
+    next.stage = 'done';
+    next.outcome = 'failed';
+    next.criteria = { ...EMPTY_CRITERIA, track: false };
+    next.reason = 'No creative trajectory is ready. Run a sketch in Create, then start again. The pose was not jumped.';
+    next.failure = next.reason;
+    return next;
+  }
   if (sample.basePosition[2] < STANCE_CRITERIA.standHeightM) {
     next.playback = 'paused';
     next.stage = 'done';
@@ -253,6 +592,7 @@ export function commandFrom(
   const next = fresh(memory);
   const zeros = zeroTorques(ranges.length || 12);
   if (next.playback !== 'playing') return { memory: next, torques: zeros, integrate: false };
+  observePeaks(next, sample);
 
   const fell = fallReason(sample);
   if (fell) {
@@ -295,6 +635,8 @@ export function commandFrom(
   next.targets = limited;
   next.flTarget = plan.flTarget;
   next.unreachable = plan.unreachable;
+  if (next.stage === 'draw' && plan.flTarget) observeDraw(next, sample, plan.flTarget, plan.unreachable.includes('FL'));
+  if (next.stage === 'track' && plan.flTarget) observeScore(next, sample, plan.flTarget, plan.unreachable.includes('FL'));
   next.stageTime += dt;
   next.elapsed += dt;
   return { memory: next, torques: pd.torques, integrate: true };
@@ -347,10 +689,49 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
   if (memory.stage === 'lift') {
     memory.criteria.lift = lifted(sample, memory);
     if (!memory.criteria.lift) remember(memory, 'Lift did not raise the front-left foot off the floor.');
+    memory.stageTime = 0;
+    if (memory.mode === 'air-draw') {
+      beginCircle(memory, sample);
+      memory.stage = 'draw';
+      memory.reason = 'Draw: the front-left foot follows a horizontal circle. The radius is not reduced.';
+      return;
+    }
+    if (memory.mode === 'score') {
+      const supported = memory.criteria.stand === true && memory.criteria.shift === true && memory.criteria.lift === true;
+      if (!supported) {
+        memory.criteria.track = false;
+        memory.playback = 'paused';
+        memory.stage = 'done';
+        memory.outcome = 'failed';
+        if (!memory.failure) memory.failure = 'Three-leg support was not established, so creative tracking did not start.';
+        memory.reason = memory.failure;
+        return;
+      }
+      if (beginTrack(memory, sample)) {
+        memory.stage = 'track';
+        memory.reason = 'Track: FL follows the selected creative brush. The other brush is ignored.';
+      }
+      return;
+    }
+    memory.stage = 'hold';
+    memory.criteria.hold = holdOk(sample, memory);
+    memory.reason = 'Hold: keeping the front-left foot up.';
+    return;
+  }
+  if (memory.stage === 'draw') {
+    finishCircle(memory, sample);
     memory.stage = 'hold';
     memory.stageTime = 0;
     memory.criteria.hold = holdOk(sample, memory);
-    memory.reason = 'Hold: keeping the front-left foot up.';
+    memory.reason = 'Hold: keeping the foot at the end of the circle.';
+    return;
+  }
+  if (memory.stage === 'track') {
+    finishTrack(memory);
+    memory.stage = 'hold';
+    memory.stageTime = 0;
+    memory.criteria.hold = holdOk(sample, memory);
+    memory.reason = 'Hold: keeping the foot at the end of the creative score.';
     return;
   }
   if (memory.stage === 'hold') {
@@ -369,15 +750,26 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
     memory.stage = 'done';
     memory.stageTime = 0;
     memory.playback = 'paused';
-    const passed =
+    const stancePassed =
       memory.criteria.stand === true &&
       memory.criteria.shift === true &&
       memory.criteria.lift === true &&
       memory.criteria.hold === true &&
       memory.criteria.return === true;
+    const gesturePassed =
+      memory.mode === 'air-draw'
+        ? memory.criteria.draw === true
+        : memory.mode === 'score'
+          ? memory.criteria.track === true
+          : true;
+    const passed = stancePassed && gesturePassed;
     memory.outcome = passed ? 'completed' : 'failed';
     memory.reason = passed
-      ? 'Completed. Every stage met its measurements. This is not dynamic stability and it is not a safety result.'
+      ? memory.mode === 'air-draw'
+        ? 'Completed. Every stage met its measurements, including the draw tracking threshold. This is not dynamic stability and it is not a safety result.'
+        : memory.mode === 'score'
+          ? 'Completed. Every stage met its measurements, including the creative-score tracking threshold. This is not dynamic stability and it is not a safety result.'
+          : 'Completed. Every stage met its measurements. This is not dynamic stability and it is not a safety result.'
       : memory.failure || 'The schedule finished without meeting every measurement.';
   }
 }
@@ -409,30 +801,56 @@ function planTargets(
   const buried = Math.max(0, -planted.flClearanceM);
   const rise = (memory.config.liftHeightM + buried) * liftScale;
   feet.FL = [feet.FL[0], feet.FL[1], feet.FL[2] + rise];
-  const solved = jointsForFeet(body, planted.orientation, feet);
-  if (liftScale > 0.02) {
-    // Support legs stay on the commanded body so the shift holds. The lifted
-    // foot is solved from the measured body, or a low body keeps it down.
-    const inverse: [number, number, number, number] = [
-      sample.baseQuaternion[0],
-      -sample.baseQuaternion[1],
-      -sample.baseQuaternion[2],
-      -sample.baseQuaternion[3],
-    ];
-    const flLocal = quatRotate(inverse, sub(feet.FL, sample.basePosition));
-    const flSolved = analyticalFoot('FL', flLocal);
-    if (flSolved) {
-      solved.joints.FL = [flSolved.joints[0], flSolved.joints[1], flSolved.joints[2]];
-      if (!flSolved.reachable && !solved.unreachable.includes('FL')) solved.unreachable = [...solved.unreachable, 'FL'];
-    } else if (!solved.unreachable.includes('FL')) {
-      solved.unreachable = [...solved.unreachable, 'FL'];
-    }
+  const drawing = memory.stage === 'draw' && memory.draw.anchor !== null && memory.draw.radiusM > 0;
+  if (drawing && memory.draw.anchor) {
+    feet.FL = circlePoint(
+      { anchor: memory.draw.anchor, radiusM: memory.draw.radiusM, direction: memory.draw.direction },
+      progress(memory),
+    );
   }
-  return { joints: solved.joints, flTarget: liftScale > 0 ? feet.FL : null, unreachable: solved.unreachable };
+  const tracking = memory.stage === 'track' && memory.score.buffer !== null && memory.score.origin !== null;
+  if (tracking) feet.FL = scoreFoot(memory);
+  const scoreHold = memory.mode === 'score' && memory.stage === 'hold' && memory.score.holdTarget !== null;
+  const scoreReturn = memory.mode === 'score' && memory.stage === 'return' && memory.score.holdTarget !== null;
+  if ((scoreHold || scoreReturn) && memory.score.holdTarget) {
+    const end = memory.score.holdTarget;
+    const home = planted.feet.FL;
+    const blendOut = scoreHold ? 1 : 1 - smoothstep(progress(memory));
+    feet.FL = [
+      home[0] + (end[0] - home[0]) * blendOut,
+      home[1] + (end[1] - home[1]) * blendOut,
+      home[2] + (end[2] - home[2]) * blendOut,
+    ];
+  }
+  const solved = jointsForFeet(body, planted.orientation, feet);
+  if (liftScale > 0.02 || drawing || tracking || scoreHold) {
+    // Support legs stay on the commanded body so the shift holds. The lifted
+    // foot is solved from the measured body, so a lower body does not leave
+    // the foot on the floor. An unreachable point is reported, not shrunk.
+    applyMeasuredFoot(solved, sample, feet.FL);
+  }
+  const showTarget = liftScale > 0 || drawing || tracking || scoreHold || scoreReturn;
+  return { joints: solved.joints, flTarget: showTarget ? feet.FL : null, unreachable: solved.unreachable };
+}
+
+function applyMeasuredFoot(
+  solved: { joints: Go2JointState; unreachable: LegId[] },
+  sample: PhysicsSnapshot,
+  worldFoot: Vec3,
+): void {
+  const local = worldPointToBody(sample.basePosition, sample.baseQuaternion, worldFoot);
+  const flSolved = analyticalFoot('FL', local);
+  const others = solved.unreachable.filter((id) => id !== 'FL');
+  if (!flSolved) {
+    solved.unreachable = [...others, 'FL'];
+    return;
+  }
+  solved.joints.FL = [flSolved.joints[0], flSolved.joints[1], flSolved.joints[2]];
+  solved.unreachable = flSolved.reachable ? others : [...others, 'FL'];
 }
 
 function blend(memory: ExperimentMemory, kind: 'shift' | 'lift'): number {
-  if (memory.stage === 'hold') return 1;
+  if (memory.stage === 'hold' || memory.stage === 'draw' || memory.stage === 'track') return 1;
   if (memory.stage === 'return') return 1 - smoothstep(progress(memory));
   if (memory.stage === kind) return smoothstep(progress(memory));
   if (kind === 'shift' && memory.stage === 'lift') return 1;
@@ -449,6 +867,13 @@ function stageDuration(memory: ExperimentMemory): number | null {
   if (memory.stage === 'stand') return STAND_SECONDS;
   if (memory.stage === 'shift') return memory.config.shiftSeconds;
   if (memory.stage === 'lift') return memory.config.liftSeconds;
+  if (memory.stage === 'draw') return memory.config.drawSeconds;
+  if (memory.stage === 'track') {
+    const buffer = memory.score.buffer;
+    if (!buffer) return memory.config.approachSeconds;
+    const rate = memory.score.entryRate > 0 ? memory.score.entryRate : memory.score.playbackRate;
+    return trackStageSeconds(buffer, rate, memory.config.approachSeconds);
+  }
   if (memory.stage === 'hold') return memory.config.holdSeconds;
   if (memory.stage === 'return') return memory.config.returnSeconds;
   return null;
@@ -531,6 +956,273 @@ function remember(memory: ExperimentMemory, reason: string): void {
   if (!memory.failure) memory.failure = reason;
 }
 
+function beginCircle(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
+  const measured = footWorld(sample, 'FL');
+  const anchor = memory.flTarget ? copyVec(memory.flTarget) : copyVec(measured);
+  const path = {
+    anchor,
+    radiusM: memory.config.circleRadiusM,
+    direction: memory.config.direction,
+  };
+  memory.draw = {
+    ...emptyDraw(),
+    anchor,
+    radiusM: path.radiusM,
+    direction: path.direction,
+    achievedHeightM: measured[2],
+    desired: circleSamples(path),
+  };
+}
+
+function finishCircle(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
+  const track = memory.draw;
+  track.revolution = true;
+  const achieved = footWorld(sample, 'FL');
+  track.achieved = [...track.achieved, copyVec(achieved)];
+  const span = pathSpan(track.achieved);
+  track.achievedWidthM = span?.widthM ?? null;
+  track.achievedDepthM = span?.depthM ?? null;
+  const within = track.samples > 0 && track.maxErrorM <= DRAW_MAX_ERROR_M;
+  if (!within) {
+    remember(
+      memory,
+      `Draw tracking error reached ${(track.maxErrorM * 1000).toFixed(1)} mm. The evaluation threshold is ${(DRAW_MAX_ERROR_M * 1000).toFixed(0)} mm. The circle was not shrunk.`,
+    );
+  }
+  memory.criteria.draw = track.held && !track.unreachable && within;
+}
+
+export function installScore(memory: ExperimentMemory, buffer: ScoreBuffer): ExperimentMemory {
+  if (!buffer || !Array.isArray(buffer.points) || buffer.points.length < 2 || !Number.isFinite(buffer.version)) {
+    const next = fresh(memory);
+    next.reason = 'The trajectory buffer was incomplete, so it was not used. No path was invented.';
+    return next;
+  }
+  if (memory.score.buffer && buffer.version < memory.score.buffer.version) return memory;
+  if (memory.playback === 'playing') {
+    const next = fresh(memory);
+    next.reason = 'A trajectory arrived while the experiment was running. It was not applied, and the pose was not jumped.';
+    return next;
+  }
+  const next = fresh(memory);
+  next.score = emptyScore();
+  next.score.buffer = buffer;
+  next.score.playbackRate = memory.score.playbackRate;
+  return next;
+}
+
+export function clearScore(memory: ExperimentMemory): ExperimentMemory {
+  const next = fresh(memory);
+  const rate = memory.score.playbackRate;
+  next.score = emptyScore();
+  next.score.playbackRate = rate;
+  if (memory.playback === 'playing' && memory.mode === 'score') {
+    next.playback = 'paused';
+    next.outcome = 'interrupted';
+    next.reason = 'The creative trajectory was dropped because the sketch changed. The pose was not jumped.';
+  }
+  return next;
+}
+
+export function setPlaybackRate(memory: ExperimentMemory, rate: number): ExperimentMemory {
+  const safe = Number.isFinite(rate) ? Math.min(4, Math.max(0.1, rate)) : 1;
+  if (memory.score.playbackRate === safe) return memory;
+  const next = fresh(memory);
+  next.score = { ...next.score, playbackRate: safe };
+  return next;
+}
+
+function beginTrack(memory: ExperimentMemory, sample: PhysicsSnapshot): boolean {
+  const buffer = memory.score.buffer;
+  const measured = footWorld(sample, 'FL');
+  const origin = memory.flTarget ? copyVec(memory.flTarget) : copyVec(measured);
+  if (!buffer) {
+    memory.criteria.track = false;
+    memory.playback = 'paused';
+    memory.stage = 'done';
+    memory.outcome = 'failed';
+    memory.reason = 'No creative trajectory is ready. Tracking did not start, and no path was invented.';
+    memory.failure = memory.reason;
+    return false;
+  }
+  const first = buffer.points[0];
+  if (!first) {
+    memory.criteria.track = false;
+    memory.playback = 'paused';
+    memory.stage = 'done';
+    memory.outcome = 'failed';
+    memory.reason = 'The creative trajectory has no first sample. Tracking did not start.';
+    memory.failure = memory.reason;
+    return false;
+  }
+  const target = mapGesture(buffer, origin, first.x, first.y);
+  const local = worldPointToBody(sample.basePosition, sample.baseQuaternion, target);
+  const solved = analyticalFoot('FL', local);
+  const reachable = Boolean(solved?.reachable);
+  const paths = splitGesturePaths(buffer, origin);
+  const rate = memory.score.playbackRate;
+  memory.score = {
+    ...emptyScore(),
+    buffer,
+    origin,
+    playbackRate: rate,
+    entryRate: rate,
+    cursor: buffer.scoreStart,
+    canvasX: first.x,
+    canvasY: first.y,
+    contact: first.contact,
+    requested: target,
+    initialReachable: reachable,
+    desiredContact: paths.contact,
+    desiredTravel: paths.travel,
+  };
+  if (!reachable) {
+    memory.criteria.track = false;
+    memory.playback = 'paused';
+    memory.stage = 'done';
+    memory.outcome = 'failed';
+    memory.reason =
+      'The first creative target is outside the reachable workspace. Tracking did not start, and the drawing was not resized.';
+    memory.failure = memory.reason;
+    return false;
+  }
+  return true;
+}
+
+function finishTrack(memory: ExperimentMemory): void {
+  const track = memory.score;
+  const buffer = track.buffer;
+  track.holdTarget = track.requested ? copyVec(track.requested) : track.origin ? copyVec(track.origin) : null;
+  const played = !buffer || track.cursor >= buffer.scoreEnd - Math.max(buffer.interval, 0.05);
+  track.finished = played;
+  const within = track.samples > 0 && track.maxErrorM <= DRAW_MAX_ERROR_M;
+  if (!within) {
+    remember(
+      memory,
+      `Creative tracking error reached ${(track.maxErrorM * 1000).toFixed(1)} mm. The evaluation threshold is ${(DRAW_MAX_ERROR_M * 1000).toFixed(0)} mm. The drawing was not resized.`,
+    );
+  }
+  if (!played) {
+    remember(
+      memory,
+      'The score did not finish inside the tracking stage. Playback rate changes commanded speed, and the stage length stays at the rate from when tracking began.',
+    );
+  }
+  memory.criteria.track = track.held && !track.unreachable && within && played && track.initialReachable === true;
+}
+
+function scoreFoot(memory: ExperimentMemory): Vec3 {
+  const buffer = memory.score.buffer;
+  const origin = memory.score.origin;
+  if (!buffer || !origin) return memory.flTarget ? copyVec(memory.flTarget) : [0, 0, 0];
+  const approach = memory.config.approachSeconds;
+  const first = buffer.points[0]!;
+  if (memory.stageTime < approach) {
+    const end = mapGesture(buffer, origin, first.x, first.y);
+    const unit = smootherstep(memory.stageTime / approach);
+    const point: Vec3 = [
+      origin[0] + (end[0] - origin[0]) * unit,
+      origin[1] + (end[1] - origin[1]) * unit,
+      origin[2] + (end[2] - origin[2]) * unit,
+    ];
+    memory.score.cursor = buffer.scoreStart;
+    memory.score.canvasX = first.x;
+    memory.score.canvasY = first.y;
+    memory.score.contact = first.contact;
+    memory.score.requested = point;
+    return point;
+  }
+  const cursor = buffer.scoreStart + (memory.stageTime - approach) * memory.score.playbackRate;
+  const sampled = sampleScore(buffer, cursor);
+  const point = mapGesture(buffer, origin, sampled.x, sampled.y);
+  memory.score.cursor = sampled.time;
+  memory.score.canvasX = sampled.x;
+  memory.score.canvasY = sampled.y;
+  memory.score.contact = sampled.contact;
+  memory.score.requested = point;
+  if (sampled.time >= buffer.scoreEnd - 1e-6) memory.score.finished = true;
+  return point;
+}
+
+function observeScore(memory: ExperimentMemory, sample: PhysicsSnapshot, desired: Vec3, unreachable: boolean): void {
+  const track = memory.score;
+  const achieved = footWorld(sample, 'FL');
+  const error = trackingError(desired, achieved);
+  track.samples += 1;
+  track.errorSumSq += error * error;
+  if (error > track.maxErrorM) track.maxErrorM = error;
+  track.lastErrorM = error;
+  track.measured = copyVec(achieved);
+  const margin = sample.support.threeLegMarginM;
+  if (margin !== null) track.minMarginM = track.minMarginM === null ? margin : Math.min(track.minMarginM, margin);
+  track.maxAbsRollRad = Math.max(track.maxAbsRollRad, Math.abs(sample.rollRad));
+  track.maxAbsPitchRad = Math.max(track.maxAbsPitchRad, Math.abs(sample.pitchRad));
+  track.maxTorqueNm = Math.max(track.maxTorqueNm, sample.maxAbsTorqueNm);
+  if (sample.saturated) track.saturated = true;
+  if (unreachable) {
+    track.unreachable = true;
+    remember(memory, 'Creative tracking asked for a foot position inverse kinematics could not reach. The drawing was not resized.');
+  }
+  if (!drawSupported(sample, memory)) {
+    track.held = false;
+    remember(memory, 'Creative tracking lost three-leg support or the front-left foot touched down.');
+  }
+  if (!track.held || track.unreachable || track.maxErrorM > DRAW_MAX_ERROR_M) memory.criteria.track = false;
+  const slot = Math.min(SCORE_SLOT_COUNT - 1, Math.floor(progress(memory) * SCORE_SLOT_COUNT));
+  if (track.achieved.length <= slot) track.achieved = [...track.achieved, copyVec(achieved)];
+  const span = pathSpan(track.achieved);
+  track.achievedWidthM = span?.widthM ?? null;
+  track.achievedDepthM = span?.depthM ?? null;
+}
+
+function observeDraw(memory: ExperimentMemory, sample: PhysicsSnapshot, desired: Vec3, unreachable: boolean): void {
+  const track = memory.draw;
+  const achieved = footWorld(sample, 'FL');
+  const error = trackingError(desired, achieved);
+  track.samples += 1;
+  track.errorSumSq += error * error;
+  if (error > track.maxErrorM) track.maxErrorM = error;
+  track.lastErrorM = error;
+  const margin = sample.support.threeLegMarginM;
+  if (margin !== null) track.minMarginM = track.minMarginM === null ? margin : Math.min(track.minMarginM, margin);
+  track.maxAbsRollRad = Math.max(track.maxAbsRollRad, Math.abs(sample.rollRad));
+  track.maxAbsPitchRad = Math.max(track.maxAbsPitchRad, Math.abs(sample.pitchRad));
+  track.maxTorqueNm = Math.max(track.maxTorqueNm, sample.maxAbsTorqueNm);
+  if (sample.saturated) track.saturated = true;
+  if (unreachable) {
+    track.unreachable = true;
+    remember(memory, 'Draw asked for a foot position inverse kinematics could not reach. The circle was not shrunk.');
+  }
+  if (!drawSupported(sample, memory)) {
+    track.held = false;
+    remember(memory, 'Draw lost three-leg support or the front-left foot touched down.');
+  }
+  if (!track.held || track.unreachable || track.maxErrorM > DRAW_MAX_ERROR_M) memory.criteria.draw = false;
+  const slot = Math.min(CIRCLE_SLOT_COUNT - 1, Math.floor(progress(memory) * CIRCLE_SLOT_COUNT));
+  if (track.achieved.length <= slot) track.achieved = [...track.achieved, copyVec(achieved)];
+  const span = pathSpan(track.achieved);
+  track.achievedWidthM = span?.widthM ?? null;
+  track.achievedDepthM = span?.depthM ?? null;
+}
+
+const CIRCLE_SLOT_COUNT = 64;
+
+function observePeaks(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
+  const margin = sample.support.threeLegMarginM;
+  if (margin !== null && (memory.peaks.minThreeLegMarginM === null || margin < memory.peaks.minThreeLegMarginM)) {
+    memory.peaks.minThreeLegMarginM = margin;
+    memory.peaks.minMarginStage = memory.stage;
+  }
+  memory.peaks.maxAbsRollRad = Math.max(memory.peaks.maxAbsRollRad, Math.abs(sample.rollRad));
+  memory.peaks.maxAbsPitchRad = Math.max(memory.peaks.maxAbsPitchRad, Math.abs(sample.pitchRad));
+  memory.peaks.maxTorqueNm = Math.max(memory.peaks.maxTorqueNm, sample.maxAbsTorqueNm);
+  if (sample.saturated) memory.peaks.saturated = true;
+}
+
+function drawSupported(sample: PhysicsSnapshot, memory: ExperimentMemory): boolean {
+  return lifted(sample, memory) && sample.support.threeLegInside && (sample.support.threeLegMarginM ?? -1) > 0;
+}
+
 function fresh(memory: ExperimentMemory): ExperimentMemory {
   return {
     ...memory,
@@ -538,8 +1230,11 @@ function fresh(memory: ExperimentMemory): ExperimentMemory {
     criteria: { ...memory.criteria },
     planted: memory.planted,
     targets: memory.targets ? copyJoints(memory.targets) : null,
-    flTarget: memory.flTarget ? [memory.flTarget[0], memory.flTarget[1], memory.flTarget[2]] : null,
+    flTarget: memory.flTarget ? copyVec(memory.flTarget) : null,
     unreachable: [...memory.unreachable],
+    draw: copyDraw(memory.draw),
+    score: shareScore(memory.score),
+    peaks: { ...memory.peaks },
   };
 }
 

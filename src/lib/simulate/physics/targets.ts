@@ -58,13 +58,17 @@ export function minimumShift(com: Planar, triangle: readonly Planar[]): Vec3 {
   return [dx, dy, 0];
 }
 
+/** World point expressed in the body frame. The body pose is the reference, not a joint command. */
+export function worldPointToBody(body: Vec3, orientation: Quat, world: Vec3): Vec3 {
+  return quatRotate(conjugate(orientation), sub(world, body));
+}
+
 export function jointsForFeet(body: Vec3, orientation: Quat, feetWorld: Readonly<Record<LegId, Vec3>>): FootPlan {
   const joints = referenceJoints();
   const unreachable: LegId[] = [];
-  const inverse = conjugate(orientation);
   for (const id of JOINT_ORDER) {
     const world = feetWorld[id];
-    const local = quatRotate(inverse, sub(world, body));
+    const local = worldPointToBody(body, orientation, world);
     const solved = analyticalFoot(id, local);
     if (!solved) {
       unreachable.push(id);

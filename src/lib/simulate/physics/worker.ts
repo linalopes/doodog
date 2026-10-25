@@ -10,16 +10,20 @@ import {
   advanceExperiment,
   begin,
   changeMode,
+  clearScore,
   configureMemory,
   createMemory,
+  installScore,
   pause,
   resume,
+  setPlaybackRate,
   stop,
   viewOf,
   type ExperimentMemory,
   type ExperimentView,
   type PhysicsMode,
 } from './experiment.ts';
+import type { ScoreBuffer } from './score.ts';
 import type { ExperimentConfig } from './settings.ts';
 import { createPhysicsSession, type PhysicsSession } from './session.ts';
 import { PHYSICS_ASSET_FILES } from './scene.ts';
@@ -44,10 +48,13 @@ interface StepMessage {
 interface ExperimentMessage {
   id: number;
   type: 'experiment';
-  action: 'configure' | 'mode' | 'start' | 'pause' | 'resume' | 'stop' | 'tick';
+  action: 'configure' | 'mode' | 'start' | 'pause' | 'resume' | 'stop' | 'tick' | 'score';
   config?: ExperimentConfig;
   mode?: PhysicsMode;
   steps?: number;
+  score?: ScoreBuffer;
+  /** Score-seconds per physics-second. Used only while Creative Score Tracking is playing. */
+  rate?: number;
 }
 
 interface DisposeMessage {
@@ -143,6 +150,13 @@ function applyExperiment(plant: PhysicsSession, message: ExperimentMessage): Phy
     plant.setTorques(zeros());
     return plant.sample();
   }
+  if (message.action === 'score') {
+    const playing = memory.playback === 'playing';
+    memory = message.score ? installScore(memory, message.score) : clearScore(memory);
+    if (!message.score && playing && memory.outcome === 'interrupted') plant.setTorques(zeros());
+    return plant.sample();
+  }
+  if (typeof message.rate === 'number') memory = setPlaybackRate(memory, message.rate);
   const advanced = advanceExperiment(plant, memory, message.steps ?? 1);
   memory = advanced.memory;
   return advanced.snapshot;

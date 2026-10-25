@@ -1,14 +1,19 @@
 /**
- * Host-clock follower for motors-off physics, and the stance experiment clock.
+ * Host-clock follower for motors-off physics, and the experiment clock.
  *
  * The creative timeline is not replaced. Motors Off integrates toward that
- * clock from the reference posture. Posture Hold and Three-Leg Stance use
- * physics experiment time instead, and only while they are playing. Seeking
- * the score does not rewind a pose the controller has moved.
+ * clock from the reference posture. Posture Hold, Three-Leg Stance, Drawing
+ * in the Air, and Creative Score Tracking use physics experiment time, and
+ * only while they are playing. Seeking the score does not rewind a pose the
+ * controller has moved. A creative trajectory is sampled on this thread and
+ * then sent to the worker as a buffer.
  */
 
 import { get } from 'svelte/store';
+import { motionOutput } from '../../motion/output.ts';
 import { seek, setPlayState, timeline } from '../../motion/timeline.ts';
+import { paramRevision } from '../../params/store.ts';
+import { currentScoreEpoch, invalidateScorePreparation, prepareCreativeScore } from './prepareScore.ts';
 import { selectSimulationBackend, simulationBackend } from './backend.ts';
 import { planPhysicsAdvance, physicsRequestedTime } from './clock.ts';
 import { createPhysicsClient, type PhysicsClient } from './client.ts';
@@ -35,6 +40,8 @@ export interface PhysicsRunState {
   /** True after Start until Reset. The creative clock must not move this pose. */
   controllerUsed: boolean;
   timelineFollow: boolean;
+  /** True while the sandbox is sampling a creative score for the next Start. */
+  preparing: boolean;
 }
 
 export const INITIAL_PHYSICS_RUN: PhysicsRunState = {
@@ -52,6 +59,7 @@ export const INITIAL_PHYSICS_RUN: PhysicsRunState = {
   experiment: null,
   controllerUsed: false,
   timelineFollow: true,
+  preparing: false,
 };
 
 export const physicsRun = writable<PhysicsRunState>(INITIAL_PHYSICS_RUN);
@@ -73,6 +81,26 @@ export function attachPhysicsDirector(): () => void {
   const stopBackend = simulationBackend.subscribe(() => {
     void pump();
   });
+  let scoreKey = scoreSignature();
+  const dropStaleScore = () => {
+    const nextKey = scoreSignature();
+    if (nextKey === scoreKey) return;
+    scoreKey = nextKey;
+    invalidateScorePreparation();
+    const current = client;
+    const run = get(physicsRun);
+    if (!current || run.status !== 'ready' || run.mode !== 'score') return;
+    void current.clearScore().then((experiment) => {
+      physicsRun.update((state) => ({
+        ...state,
+        experiment,
+        snapshot: state.snapshot,
+        notice: experiment.reason || 'The sketch changed. The previous trajectory was dropped.',
+      }));
+    });
+  };
+  const stopMotion = motionOutput.subscribe(dropStaleScore);
+  const stopParams = paramRevision.subscribe(dropStaleScore);
   const loop = () => {
     if (!attached) return;
     raf = requestAnimationFrame(() => {
@@ -86,6 +114,8 @@ export function attachPhysicsDirector(): () => void {
     if (raf) cancelAnimationFrame(raf);
     stopClock();
     stopBackend();
+    stopMotion();
+    stopParams();
     generation += 1;
     client?.dispose();
     client = null;
@@ -141,6 +171,7 @@ export async function initializePhysics(): Promise<void> {
       experiment,
       controllerUsed: false,
       timelineFollow: mode === 'motors-off',
+      preparing: false,
     });
     void pump();
   } catch (error) {
@@ -158,8 +189,10 @@ export async function resetPhysics(): Promise<void> {
   const current = client;
   const run = get(physicsRun);
   if (!current || run.status !== 'ready') return;
+  invalidateScorePreparation();
   const ticket = ++generation;
   setPlayState('paused');
+  physicsRun.update((state) => ({ ...state, preparing: false }));
   try {
     const result = await current.reset();
     if (ticket !== generation) return;
@@ -194,9 +227,11 @@ export function stepPhysicsOnce(): void {
 }
 
 export async function setPhysicsMode(mode: PhysicsMode): Promise<void> {
+  invalidateScorePreparation();
   physicsRun.update((state) => ({
     ...state,
     mode,
+    preparing: false,
     timelineFollow: mode === 'motors-off' && !state.controllerUsed,
   }));
   const current = client;
@@ -239,13 +274,48 @@ export async function configureExperiment(config: ExperimentConfig): Promise<voi
 export async function startExperiment(): Promise<void> {
   const current = client;
   const run = get(physicsRun);
-  if (!current || run.status !== 'ready' || run.mode === 'motors-off') return;
+  if (!current || run.status !== 'ready' || run.mode === 'motors-off' || run.preparing) return;
   const ticket = ++generation;
+  const epoch = currentScoreEpoch();
   try {
+    if (run.mode === 'score') {
+      physicsRun.update((state) => ({
+        ...state,
+        preparing: true,
+        error: '',
+        notice: 'Sampling the creative score in the sandbox.',
+      }));
+      const prepared = await prepareCreativeScore({
+        channel: run.config.channel,
+        gestureSizeM: run.config.gestureSizeM,
+        windowSeconds: run.config.trackSeconds,
+      });
+      if (ticket !== generation) {
+        physicsRun.update((state) => ({ ...state, preparing: false }));
+        return;
+      }
+      if (!prepared.ok || prepared.buffer.version === 0 || currentScoreEpoch() !== epoch) {
+        physicsRun.update((state) => ({
+          ...state,
+          preparing: false,
+          notice: prepared.ok
+            ? 'The sketch changed while the score was being sampled. The trajectory was discarded.'
+            : prepared.reason,
+        }));
+        return;
+      }
+      const installed = await current.setScore(prepared.buffer);
+      if (ticket !== generation || currentScoreEpoch() !== epoch) {
+        physicsRun.update((state) => ({ ...state, preparing: false, experiment: installed }));
+        return;
+      }
+      physicsRun.update((state) => ({ ...state, experiment: installed }));
+    }
     const result = await current.start();
     if (ticket !== generation) return;
     physicsRun.update((state) => ({
       ...state,
+      preparing: false,
       controllerUsed: true,
       timelineFollow: false,
       snapshot: result.snapshot,
@@ -257,10 +327,16 @@ export async function startExperiment(): Promise<void> {
     if (ticket !== generation) return;
     physicsRun.update((state) => ({
       ...state,
+      preparing: false,
       status: 'error',
       error: error instanceof Error ? error.message : 'The experiment could not start.',
     }));
   }
+}
+
+function scoreSignature(): string {
+  const output = get(motionOutput);
+  return `${output.runId ?? ''}:${get(paramRevision)}`;
 }
 
 export async function pauseExperiment(): Promise<void> {
@@ -305,7 +381,7 @@ async function experimentFrame(): Promise<void> {
   ticking = true;
   const ticket = generation;
   try {
-    const result = await client.tick(EXPERIMENT_STEPS_PER_FRAME);
+    const result = await client.tick(EXPERIMENT_STEPS_PER_FRAME, get(timeline).rate);
     if (ticket !== generation || !client) return;
     physicsRun.update((state) => ({
       ...state,

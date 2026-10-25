@@ -43,7 +43,7 @@
     physics: {
       title: 'Physics',
       description:
-        'An optional MuJoCo experiment. Motors Off lets the Go2 fall. A torque controller can try a three-leg stance. Nothing here is a safety result.',
+        'An optional MuJoCo experiment. Motors Off lets the Go2 fall. A torque controller can try a three-leg stance, a circle in the air, or one creative brush with the front-left foot. Nothing here is a safety result.',
       tag: 'Experimental',
     },
   };

@@ -101,11 +101,17 @@
         basePosition: physics.basePosition,
         baseQuaternion: physics.baseQuaternion,
       });
+      const drawing = $physicsRun.mode === 'air-draw';
+      const scoring = $physicsRun.mode === 'score';
       view.setPhysicsGuide({
         support: physics.support.polygon,
-        triangle: $physicsRun.mode === 'three-leg' ? physics.support.threeLegTriangle : [],
+        triangle: $physicsRun.mode === 'three-leg' || drawing || scoring ? physics.support.threeLegTriangle : [],
         com: physics.support.com,
         flTarget: experiment?.flTarget ?? null,
+        desiredPath: drawing ? (experiment?.draw.desired ?? []) : [],
+        achievedPath: drawing ? (experiment?.draw.achieved ?? []) : scoring ? (experiment?.score.achieved ?? []) : [],
+        brushDown: scoring ? (experiment?.score.desiredContact ?? []) : [],
+        brushUp: scoring ? (experiment?.score.desiredTravel ?? []) : [],
       });
       if (!trailsHidden) {
         view.setMarks([]);
@@ -143,6 +149,8 @@
     stand: 'Stand',
     shift: 'Shift',
     lift: 'Lift',
+    draw: 'Draw',
+    track: 'Track Creative Score',
     hold: 'Hold',
     return: 'Return',
     done: 'Finished',
@@ -157,7 +165,14 @@
     {#if physicsLive && $physicsRun.snapshot}
       <p class="viewport__note">
         {#if controlled && experiment}
-          {STAGE_LABEL[experiment.stage] ?? experiment.stage}. Torque PD. Contacts and the centre of mass are measured. The dark marker is the requested front-left target. This is not a safe path, and geometric paint is hidden.
+          {STAGE_LABEL[experiment.stage] ?? experiment.stage}. Torque PD. Contacts and the centre of mass are measured. The dark marker is the requested front-left target.
+          {#if experiment.mode === 'air-draw'}
+            The dark line is the requested circle and the pink line is the measured foot. Neither line is ink.
+          {/if}
+          {#if experiment.mode === 'score'}
+            The purple line is the creative brush-down path, the turquoise line is brush-up travel, and the pink line is the measured foot. None of these lines is ink. The other creative brush is ignored. The physical drawing leg is FL.
+          {/if}
+          This is not a safe path, and geometric paint is hidden.
         {:else}
           Zero torque. The robot may fall. Contacts are from MuJoCo. This is not a safe path, and geometric paint is hidden.
         {/if}
@@ -248,6 +263,15 @@
         <span><i class="swatch swatch--desired"></i> FR–RL–RR triangle</span>
         <span><i class="swatch swatch--paint"></i> Centre of mass</span>
         <span><i class="swatch swatch--target"></i> FL target</span>
+        {#if experiment?.mode === 'air-draw'}
+          <span><i class="swatch swatch--circle"></i> Requested circle</span>
+          <span><i class="swatch swatch--foot"></i> Measured foot</span>
+        {/if}
+        {#if experiment?.mode === 'score'}
+          <span><i class="swatch swatch--circle"></i> Brush down</span>
+          <span><i class="swatch swatch--achieved"></i> Brush up</span>
+          <span><i class="swatch swatch--foot"></i> Measured foot</span>
+        {/if}
       </p>
     {:else}
       <p class="viewport__legend">
@@ -353,6 +377,7 @@
   .viewport__legend {
     margin: 0;
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
     font-size: 12px;
     background: rgba(255, 255, 255, 0.9);
@@ -389,6 +414,14 @@
     height: 8px;
     border: 2px solid var(--brand-deep-purple);
     background: transparent;
+  }
+
+  .swatch--circle {
+    background: var(--brand-deep-purple);
+  }
+
+  .swatch--foot {
+    background: var(--brand-pink);
   }
 
   .viewport__status {

@@ -15,7 +15,12 @@
     stepPhysicsOnce,
     stopExperiment,
   } from '../physics/run';
-  import { CONTROLLER_NOTE, DEFAULT_EXPERIMENT } from '../physics/settings';
+  import { timeline } from '../../motion/timeline';
+  import { motionOutput } from '../../motion/output';
+  import { activeSketch } from '../../sketches/store';
+  import { gestureScale, otherChannel, trackStageSeconds } from '../physics/score';
+  import { ASSUMED_CANVAS } from '../go2/defaults';
+  import { CONTROLLER_NOTE, DEFAULT_EXPERIMENT, DRAW_COMPLETION_NOTE, DRAW_NOTE, SCORE_COMPLETION_NOTE, SCORE_NOTE } from '../physics/settings';
   import { FLOOR_NOTE, TORQUE_NOTE } from '../physics/scene';
   import { PHYSICS_LABEL, type PhysicsSnapshot } from '../physics/types';
   import type { PhysicsMode } from '../physics/experiment';
@@ -25,6 +30,8 @@
     { id: 'motors-off', label: 'Motors Off' },
     { id: 'posture-hold', label: 'Posture Hold' },
     { id: 'three-leg', label: 'Three-Leg Stance' },
+    { id: 'air-draw', label: 'Drawing in the Air' },
+    { id: 'score', label: 'Creative Score Tracking' },
   ];
   const STAGE: Record<string, string> = {
     idle: 'Idle',
@@ -32,6 +39,8 @@
     stand: 'Stand',
     shift: 'Shift',
     lift: 'Lift',
+    draw: 'Draw',
+    track: 'Track Creative Score',
     hold: 'Hold',
     return: 'Return',
     done: 'Finished',
@@ -51,6 +60,21 @@
   const experiment = $derived(run.experiment);
   const playing = $derived(experiment?.playback === 'playing');
   const controlled = $derived(run.mode !== 'motors-off');
+  const stance = $derived(run.mode === 'three-leg' || run.mode === 'air-draw' || run.mode === 'score');
+  const drawing = $derived(run.mode === 'air-draw');
+  const scoring = $derived(run.mode === 'score');
+  const clock = $derived($timeline);
+  const canvas = $derived($motionOutput.canvas ?? ASSUMED_CANVAS);
+  const configuredScale = $derived(gestureScale(canvas.width, canvas.height, run.config.gestureSizeM));
+  const scoreInfo = $derived(experiment?.score.info ?? null);
+  const trackingSeconds = $derived.by(() => {
+    if (!scoring) return null;
+    const rate = Math.max(clock.rate, 0.1);
+    const locked = experiment?.score.entryRate && experiment.score.entryRate > 0 ? experiment.score.entryRate : rate;
+    if (scoreInfo) return trackStageSeconds(scoreInfo, locked, run.config.approachSeconds);
+    const span = clock.durationSeconds && clock.durationSeconds > 0 ? clock.durationSeconds : run.config.trackSeconds;
+    return run.config.approachSeconds + span / rate;
+  });
 
   const degrees = (radians: number) => `${((radians * 180) / Math.PI).toFixed(1)}°`;
 
@@ -58,9 +82,9 @@
     return sample.joints[leg].map((angle) => degrees(angle)).join('  ');
   }
 
-  function metres(value: number | null): string {
+  function metres(value: number | null, digits = 0): string {
     if (value === null || !Number.isFinite(value)) return '—';
-    return `${(value * 1000).toFixed(0)} mm`;
+    return `${(value * 1000).toFixed(digits)} mm`;
   }
 
   function onLift(event: Event): void {
@@ -68,7 +92,30 @@
     void configureExperiment({ ...run.config, liftHeightM: mm / 1000 });
   }
 
-  function onSeconds(key: 'shiftSeconds' | 'liftSeconds' | 'holdSeconds' | 'returnSeconds', event: Event): void {
+  function onRadius(event: Event): void {
+    const mm = Number((event.currentTarget as HTMLInputElement).value);
+    void configureExperiment({ ...run.config, circleRadiusM: mm / 1000 });
+  }
+
+  function onDirection(event: Event): void {
+    const direction = (event.currentTarget as HTMLSelectElement).value === 'cw' ? 'cw' : 'ccw';
+    void configureExperiment({ ...run.config, direction });
+  }
+
+  function onGesture(event: Event): void {
+    const mm = Number((event.currentTarget as HTMLInputElement).value);
+    void configureExperiment({ ...run.config, gestureSizeM: mm / 1000 });
+  }
+
+  function onChannel(event: Event): void {
+    const channel = (event.currentTarget as HTMLSelectElement).value === 'right' ? 'right' : 'left';
+    void configureExperiment({ ...run.config, channel });
+  }
+
+  function onSeconds(
+    key: 'shiftSeconds' | 'liftSeconds' | 'holdSeconds' | 'returnSeconds' | 'drawSeconds' | 'trackSeconds' | 'approachSeconds',
+    event: Event,
+  ): void {
     const seconds = Number((event.currentTarget as HTMLInputElement).value);
     void configureExperiment({ ...run.config, [key]: seconds });
   }
@@ -78,6 +125,18 @@
     if (value === false) return 'not met';
     return 'not reached';
   }
+
+  function pointText(point: readonly [number, number, number] | null): string {
+    if (!point) return '—';
+    return `${(point[0] * 1000).toFixed(1)}, ${(point[1] * 1000).toFixed(1)}, ${(point[2] * 1000).toFixed(1)} mm`;
+  }
+
+  function reachText(initial: boolean | null, unreachable: boolean): string {
+    if (initial === false) return 'first target unreachable · drawing was not resized';
+    if (unreachable) return 'a later target was unreachable · drawing was not resized';
+    if (initial === true) return 'first target inside the geometric workspace';
+    return 'checked when tracking starts';
+  }
 </script>
 
 <section class="physics" aria-label="MuJoCo physics experiment">
@@ -86,8 +145,9 @@
     <p class="physics__label">{PHYSICS_LABEL}</p>
   </header>
   <p class="muted">
-    Motors Off drops the Go2 under gravity. Posture Hold and Three-Leg Stance send torque commands in
-    simulation only. Brush trajectories are not tracked. Nothing is sent to a physical robot.
+    Motors Off drops the Go2 under gravity. Posture Hold, Three-Leg Stance, Drawing in the Air, and Creative Score
+    Tracking send torque commands in simulation only. The circle and the creative path are not ink. Nothing is sent
+    to a physical robot.
   </p>
   <div class="physics__actions" role="group" aria-label="Controller">
     {#each MODES as mode (mode.id)}
@@ -109,7 +169,9 @@
     {#if !controlled}
       <button type="button" class="btn btn--small" disabled={!ready || !run.timelineFollow} onclick={stepPhysicsOnce}>Step</button>
     {:else}
-      <button type="button" class="btn btn--small" disabled={!ready || playing} onclick={() => void startExperiment()}>Start</button>
+      <button type="button" class="btn btn--small" disabled={!ready || playing || run.preparing} onclick={() => void startExperiment()}>
+        {run.preparing ? 'Sampling…' : 'Start'}
+      </button>
       <button type="button" class="btn btn--small" disabled={!playing} onclick={() => void pauseExperiment()}>Pause</button>
       <button
         type="button"
@@ -129,7 +191,7 @@
       </button>
     {/if}
   </div>
-  {#if run.mode === 'three-leg'}
+  {#if stance}
     <div class="physics__fields">
       <label class="field">
         <span class="field__label">Lift height</span>
@@ -158,11 +220,81 @@
         <span class="field__label">Return</span>
         <input type="number" min="0.5" max="8" step="0.1" value={run.config.returnSeconds} onchange={(event) => onSeconds('returnSeconds', event)} />
       </label>
+      {#if drawing}
+        <label class="field">
+          <span class="field__label">Circle radius</span>
+          <input
+            type="number"
+            min="5"
+            max="40"
+            step="1"
+            value={Math.round((run.config.circleRadiusM || DEFAULT_EXPERIMENT.circleRadiusM) * 1000)}
+            onchange={onRadius}
+          />
+        </label>
+        <label class="field">
+          <span class="field__label">Draw</span>
+          <input type="number" min="1" max="12" step="0.1" value={run.config.drawSeconds} onchange={(event) => onSeconds('drawSeconds', event)} />
+        </label>
+        <label class="field">
+          <span class="field__label">Direction</span>
+          <select value={run.config.direction} onchange={onDirection}>
+            <option value="ccw">Counterclockwise</option>
+            <option value="cw">Clockwise</option>
+          </select>
+        </label>
+      {/if}
+      {#if scoring}
+        <label class="field">
+          <span class="field__label">Creative brush</span>
+          <select value={run.config.channel} onchange={onChannel}>
+            <option value="left">Left</option>
+            <option value="right">Right</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field__label">Gesture envelope</span>
+          <input
+            type="number"
+            min="5"
+            max="80"
+            step="1"
+            value={Math.round((run.config.gestureSizeM || DEFAULT_EXPERIMENT.gestureSizeM) * 1000)}
+            onchange={onGesture}
+          />
+        </label>
+        <label class="field">
+          <span class="field__label">Approach</span>
+          <input type="number" min="0.5" max="4" step="0.1" value={run.config.approachSeconds} onchange={(event) => onSeconds('approachSeconds', event)} />
+        </label>
+        <label class="field">
+          <span class="field__label">Window</span>
+          <input type="number" min="1" max="32" step="0.5" value={run.config.trackSeconds} onchange={(event) => onSeconds('trackSeconds', event)} />
+        </label>
+      {/if}
     </div>
-    <p class="help-text">Durations are seconds of physics experiment time. Lift height is millimetres of foot clearance.</p>
+    <p class="help-text">Durations are seconds of physics experiment time. Lift height is millimetres of foot clearance. Circle radius is millimetres in the horizontal plane, and it is not reduced to make the circle reachable. The gesture envelope is millimetres on the longer canvas side. It is not the 0.20 m paper, and the drawing is not fitted to the reachable workspace.</p>
   {/if}
   <p class="help-text">{controlled ? CLOCK_NOTE : 'Play and pause on the shared timeline. Physics integrates toward that time in fixed steps. Seeking backward inside this run resets the model and replays it. Seeking before the run is refused.'}</p>
-  {#if run.mode === 'three-leg'}
+  {#if drawing}
+    <p class="help-text">{DRAW_NOTE}</p>
+    <p class="help-text">{DRAW_COMPLETION_NOTE}</p>
+  {:else if scoring}
+    <p class="help-text">{SCORE_NOTE}</p>
+    <p class="help-text">{SCORE_COMPLETION_NOTE}</p>
+    <p class="help-text">
+      Active sketch: {$activeSketch?.name ?? 'No sketch'}. Physical drawing leg: FL. The {otherChannel(run.config.channel)} brush
+      is ignored and does not command a leg. Creative playback is {clock.playState} at {clock.rate}×. Score time during Track
+      advances at that rate. At 1×, one score second takes one physics second.
+      {#if clock.durationSeconds}
+        One declared score period is {clock.durationSeconds.toFixed(2)} s.
+      {:else}
+        This score has no declared period. The window of {run.config.trackSeconds.toFixed(1)} score seconds is used.
+      {/if}
+      Tracking lasts {trackingSeconds === null ? '—' : trackingSeconds.toFixed(2)} s of physics time, including the approach.
+      Configured mapping: {(configuredScale * 1000).toFixed(3)} mm per canvas unit, so the canvas is {(canvas.width * configuredScale * 1000).toFixed(1)} mm × {(canvas.height * configuredScale * 1000).toFixed(1)} mm.
+    </p>
+  {:else if run.mode === 'three-leg'}
     <p class="help-text">{COMPLETION_NOTE}</p>
   {/if}
   {#if run.error}
@@ -228,14 +360,174 @@
         <dd>{snapshot.effortNm.toFixed(1)} Nm sum · {snapshot.maxAbsTorqueNm.toFixed(1)} Nm max{snapshot.saturated ? ' · clamped' : ''}</dd>
       </div>
     </dl>
-    {#if run.mode === 'three-leg' && experiment}
+    {#if stance && experiment}
       <ul class="physics__joints">
         <li><span>Stand</span> {flag(experiment.criteria.stand)}</li>
         <li><span>Shift</span> {flag(experiment.criteria.shift)}</li>
         <li><span>Lift</span> {flag(experiment.criteria.lift)}</li>
+        {#if drawing}
+          <li><span>Draw</span> {flag(experiment.criteria.draw)}</li>
+        {/if}
+        {#if scoring}
+          <li><span>Track</span> {flag(experiment.criteria.track)}</li>
+        {/if}
         <li><span>Hold</span> {flag(experiment.criteria.hold)}</li>
         <li><span>Return</span> {flag(experiment.criteria.return)}</li>
       </ul>
+    {/if}
+    {#if drawing && experiment}
+      <dl class="physics__readout">
+        <div>
+          <dt>Tracking error</dt>
+          <dd>{metres(experiment.draw.lastErrorM, 1)}</dd>
+        </div>
+        <div>
+          <dt>Max / RMS error</dt>
+          <dd>{metres(experiment.draw.maxErrorM, 1)} / {metres(experiment.rmsErrorM, 1)}</dd>
+        </div>
+        <div>
+          <dt>Draw margin</dt>
+          <dd>{metres(experiment.draw.minMarginM, 0)}</dd>
+        </div>
+        <div>
+          <dt>Draw roll / pitch</dt>
+          <dd>{degrees(experiment.draw.maxAbsRollRad)} / {degrees(experiment.draw.maxAbsPitchRad)}</dd>
+        </div>
+        <div>
+          <dt>Draw torque</dt>
+          <dd>{experiment.draw.maxTorqueNm.toFixed(1)} Nm max{experiment.draw.saturated ? ' · clamped' : ''}</dd>
+        </div>
+        <div>
+          <dt>Run roll / pitch</dt>
+          <dd>{degrees(experiment.peaks.maxAbsRollRad)} / {degrees(experiment.peaks.maxAbsPitchRad)}</dd>
+        </div>
+        <div>
+          <dt>Run torque</dt>
+          <dd>{experiment.peaks.maxTorqueNm.toFixed(1)} Nm max{experiment.peaks.saturated ? ' · clamped' : ''}</dd>
+        </div>
+        <div>
+          <dt>Lowest three-leg margin</dt>
+          <dd>
+            {metres(experiment.peaks.minThreeLegMarginM, 0)}
+            {experiment.peaks.minMarginStage ? ` · ${STAGE[experiment.peaks.minMarginStage] ?? experiment.peaks.minMarginStage}` : ''}
+          </dd>
+        </div>
+        <div>
+          <dt>Commanded radius</dt>
+          <dd>{metres(experiment.draw.radiusM || null, 0)}</dd>
+        </div>
+        <div>
+          <dt>Achieved span</dt>
+          <dd>{metres(experiment.draw.achievedWidthM, 1)} × {metres(experiment.draw.achievedDepthM, 1)}</dd>
+        </div>
+        <div>
+          <dt>Draw plane</dt>
+          <dd>{experiment.draw.anchor ? `${(experiment.draw.anchor[2] * 1000).toFixed(1)} mm` : '—'}</dd>
+        </div>
+        <div>
+          <dt>Foot at draw start</dt>
+          <dd>{experiment.draw.achievedHeightM === null ? '—' : `${(experiment.draw.achievedHeightM * 1000).toFixed(1)} mm`}</dd>
+        </div>
+        <div>
+          <dt>Revolution</dt>
+          <dd>{experiment.draw.revolution ? 'complete' : 'not complete'}</dd>
+        </div>
+      </dl>
+    {/if}
+    {#if scoring && experiment}
+      <dl class="physics__readout">
+        <div>
+          <dt>Creative brush</dt>
+          <dd>{experiment.score.info?.channel ?? run.config.channel}</dd>
+        </div>
+        <div>
+          <dt>Ignored brush</dt>
+          <dd>{experiment.score.info?.ignoredChannel ?? otherChannel(run.config.channel)}</dd>
+        </div>
+        <div>
+          <dt>Canvas</dt>
+          <dd>
+            {experiment.score.canvasX === null || experiment.score.canvasY === null
+              ? '—'
+              : `${experiment.score.canvasX.toFixed(1)}, ${experiment.score.canvasY.toFixed(1)}`}
+          </dd>
+        </div>
+        <div>
+          <dt>Contact</dt>
+          <dd>{experiment.score.contact === null ? '—' : experiment.score.contact ? 'down · metadata' : 'up · travel'}</dd>
+        </div>
+        <div>
+          <dt>Requested</dt>
+          <dd>{pointText(experiment.score.requested)}</dd>
+        </div>
+        <div>
+          <dt>Measured foot</dt>
+          <dd>{pointText(experiment.score.measured)}</dd>
+        </div>
+        <div>
+          <dt>Mapping scale</dt>
+          <dd>
+            {experiment.score.info
+              ? `${(experiment.score.info.scaleM * 1000).toFixed(3)} mm/unit · ${(experiment.score.info.spanWidthM * 1000).toFixed(1)} × ${(experiment.score.info.spanHeightM * 1000).toFixed(1)} mm`
+              : 'sampled at start'}
+          </dd>
+        </div>
+        <div>
+          <dt>Reachability</dt>
+          <dd>{reachText(experiment.score.initialReachable, experiment.score.unreachable)}</dd>
+        </div>
+        <div>
+          <dt>Tracking error</dt>
+          <dd>{metres(experiment.score.lastErrorM, 1)}</dd>
+        </div>
+        <div>
+          <dt>Max / RMS error</dt>
+          <dd>{metres(experiment.score.maxErrorM, 1)} / {metres(experiment.score.rmsErrorM, 1)}</dd>
+        </div>
+        <div>
+          <dt>Track margin</dt>
+          <dd>{metres(experiment.score.minMarginM, 0)}</dd>
+        </div>
+        <div>
+          <dt>Track roll / pitch</dt>
+          <dd>{degrees(experiment.score.maxAbsRollRad)} / {degrees(experiment.score.maxAbsPitchRad)}</dd>
+        </div>
+        <div>
+          <dt>Track torque</dt>
+          <dd>{experiment.score.maxTorqueNm.toFixed(1)} Nm max{experiment.score.saturated ? ' · clamped' : ''}</dd>
+        </div>
+        <div>
+          <dt>Run roll / pitch</dt>
+          <dd>{degrees(experiment.peaks.maxAbsRollRad)} / {degrees(experiment.peaks.maxAbsPitchRad)}</dd>
+        </div>
+        <div>
+          <dt>Run torque</dt>
+          <dd>{experiment.peaks.maxTorqueNm.toFixed(1)} Nm max{experiment.peaks.saturated ? ' · clamped' : ''}</dd>
+        </div>
+        <div>
+          <dt>Lowest three-leg margin</dt>
+          <dd>
+            {metres(experiment.peaks.minThreeLegMarginM, 0)}
+            {experiment.peaks.minMarginStage ? ` · ${STAGE[experiment.peaks.minMarginStage] ?? experiment.peaks.minMarginStage}` : ''}
+          </dd>
+        </div>
+        <div>
+          <dt>Score cursor</dt>
+          <dd>{experiment.score.cursor.toFixed(2)} s · {experiment.score.info ? `${experiment.score.info.scoreEnd.toFixed(2)} s` : '—'}</dd>
+        </div>
+        <div>
+          <dt>Playback rate</dt>
+          <dd>{experiment.score.playbackRate}× · stage locked at {experiment.score.entryRate > 0 ? `${experiment.score.entryRate}×` : '—'}</dd>
+        </div>
+        <div>
+          <dt>Samples</dt>
+          <dd>
+            {experiment.score.info
+              ? `${experiment.score.info.interval.toFixed(3)} s${experiment.score.info.widened ? ' · interval widened to stay within 320 samples' : ''}`
+              : '—'}
+          </dd>
+        </div>
+      </dl>
     {/if}
     <ul class="physics__joints">
       {#each LEGS as leg (leg)}

@@ -37,12 +37,20 @@ export interface PhysicsMeshPose {
   baseQuaternion: QuatWxyz;
 }
 
-/** Measured support and the requested front-left target. Empty arrays hide a mark. */
+/** Measured support, the requested foot target, and an air path. Empty arrays hide a mark. */
 export interface PhysicsGuide {
   support: readonly Vec3[];
   triangle: readonly Vec3[];
   com: Vec3 | null;
   flTarget: Vec3 | null;
+  /** Requested circle. Not ink. */
+  desiredPath: readonly Vec3[];
+  /** Measured foot frame. Not ink. */
+  achievedPath: readonly Vec3[];
+  /** Creative brush-down runs. Not ink. */
+  brushDown: readonly (readonly Vec3[])[];
+  /** Creative brush-up travel. Not ink, and not discarded. */
+  brushUp: readonly (readonly Vec3[])[];
 }
 
 export interface Go2View {
@@ -191,7 +199,12 @@ export function createGo2View(
   );
   comDot.visible = false;
   targetDot.visible = false;
-  scene.add(comDot, targetDot);
+  const desiredTube = pathTube(0x22113e);
+  const achievedTube = pathTube(0xea7dff);
+  const downTubes = [pathTube(0x22113e), pathTube(0x22113e), pathTube(0x22113e), pathTube(0x22113e)];
+  const upTubes = [pathTube(0x08f2db), pathTube(0x08f2db), pathTube(0x08f2db), pathTube(0x08f2db)];
+  for (const tube of [...downTubes, ...upTubes]) scene.add(tube);
+  scene.add(comDot, targetDot, desiredTube, achievedTube);
 
   const legs: Partial<Record<LegId, LegNodes>> = {};
 
@@ -319,6 +332,10 @@ export function createGo2View(
       targetDot.visible = false;
       setSegments(lines.target, []);
     }
+    setTube(desiredTube, guide?.desiredPath ?? []);
+    setTube(achievedTube, guide?.achievedPath ?? []);
+    downTubes.forEach((tube, index) => setTube(tube, guide?.brushDown?.[index] ?? []));
+    upTubes.forEach((tube, index) => setTube(tube, guide?.brushUp?.[index] ?? []));
     requestRender();
   }
 
@@ -496,6 +513,28 @@ function makeLine(color: number, dashed: boolean): THREE.LineSegments {
   const line = new THREE.LineSegments(new THREE.BufferGeometry(), material);
   line.frustumCulled = false;
   return line;
+}
+
+function pathTube(color: number): THREE.Mesh {
+  const mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color }));
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  return mesh;
+}
+
+/** Display thickness only. The path coordinates stay on the foot frame. */
+function setTube(mesh: THREE.Mesh, points: readonly Vec3[]): void {
+  mesh.geometry.dispose();
+  if (points.length < 2) {
+    mesh.geometry = new THREE.BufferGeometry();
+    mesh.visible = false;
+    return;
+  }
+  const curve = new THREE.CatmullRomCurve3(
+    points.map((point) => new THREE.Vector3(point[0], point[1], point[2])),
+  );
+  mesh.geometry = new THREE.TubeGeometry(curve, Math.max(8, points.length), 0.002, 6, false);
+  mesh.visible = true;
 }
 
 function loopPairs(points: readonly Vec3[], z: number): Array<[Vec3, Vec3]> {

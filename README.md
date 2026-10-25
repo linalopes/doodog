@@ -9,7 +9,7 @@ doodog is the artistic project. doodog studio is the creative coding application
 Repository: [linalopes/doodog](https://github.com/linalopes/doodog)  
 Package identifier: `doodog`
 
-**Phase 05B · Three-leg stance.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. Simulate can chart the joint motion of a score. An optional MuJoCo experiment can drop the same Go2 under gravity, hold the home posture, or try to stand on three legs while the front-left foot lifts. The kinematic view stays labeled **Kinematic Preview — Not Physically Validated**. The physics view is labeled **MuJoCo Physics — Experimental**. The physical robot is not in this phase.
+**Phase 05D · Creative score tracking.** One host timeline samples `motion(t)` and poses a Unitree Go2 in Three.js. Creative parameters update the drawing and the kinematic pose together. The Create canvas can show where each front brush can reach. Simulate can chart the joint motion of a score. An optional MuJoCo experiment can drop the same Go2 under gravity, hold the home posture, stand on three legs, trace a small circle with the raised front-left foot, or follow one creative brush with that same foot. The kinematic view stays labeled **Kinematic Preview — Not Physically Validated**. The physics view is labeled **MuJoCo Physics — Experimental**. The physical robot is not in this phase.
 
 Concept, interaction design and development: [Lina Lopes](https://linalopes.info/)
 
@@ -108,11 +108,53 @@ In the automated MuJoCo check, with the default 15 mm request, the run completes
 
 The same Three.js robot draws the simulated body. The turquoise loop is the convex hull of the feet that are actually on the floor. The dark loop is the FR–RL–RR triangle. The pink mark is the measured centre of mass and its projection. The dark marker above the front-left foot is the requested target, not the measured foot. Geometric paint stays hidden. Switching back to Kinematic Preview restores the fixed-body pose and does not change the sketch.
 
+## Implemented in Phase 05C
+
+Drawing in the Air keeps the Phase 05B torque controller and adds a circle after the lift. The stages are Stand, Shift, Lift, Draw, Hold, Return. Motors Off, Posture Hold, and Three-Leg Stance are unchanged. The circle is not read from a score and it is not ink.
+
+The path is a horizontal circle in the world frame. Its anchor is the commanded front-left foot target at the end of Lift, and the path starts and ends on that point. The centre is one radius toward world −X, which is what lets the path include the anchor instead of starting at the middle. The default radius is 10 mm, the default duration is 4 s, and the default direction is counterclockwise when seen from above. The angle follows a smootherstep. A constant speed would leave Lift, where the target velocity is already zero, with a sideways speed of about 16 mm/s. The radius is not reduced when a point is hard to reach.
+
+The drawing height is that commanded target, not a snap to the measured foot. Snapping would move the command by whatever tracking error the lift still had. The measured foot height at the start of Draw is shown beside the plane. In the automated run the plane was at 38.6 mm and the measured foot frame was at 35.9 mm.
+
+The three supporting legs stay on the stance targets. The front-left target is the circle point, expressed in the measured body frame and solved with the same inverse kinematics as the lift. The solver does not write joint positions. The PD torque is unchanged, and commands stay inside the MJCF ctrlrange.
+
+The tracked point is the kinematic foot frame, the same point the inverse kinematics commands. It is not the brush tip and it is not the collision sphere. The dark line in the viewport is the requested circle. The pink line is the measured foot frame. Both are drawn 2 mm thick so the small circle can be seen; that thickness is display only and is not part of the measurement. Neither line is paint.
+
+Completed still requires the three-leg measurements. Draw adds its own: the front-left foot stays up, the three support feet stay down, every circle point is reachable, and the maximum distance between the commanded foot frame and the measured foot frame stays within 8 mm. That 8 mm is an evaluation threshold for this experiment. It is not a motor rating. Reaching the end of the four seconds is not enough. A centre-of-mass projection inside the triangle is not dynamic stability.
+
+In the automated MuJoCo check, with the defaults, the run completes both times and the second matches the first. The maximum foot-frame error is 5.5 mm and the root-mean-square error is 4.7 mm. During the circle the lowest FR–RL–RR margin is about 72 mm. The measured path spans about 19.9 mm by 18.6 mm, against a commanded span of 20 mm by 20 mm. The largest roll is about 4.5° and the largest pitch is about 2.8°. The largest torque in the run is about 14.9 Nm, and about 11.0 Nm during the circle. No command saturates. The revolution finishes and the front-left foot returns to the floor, with the body near 0.264 m. The lowest three-leg margin in the whole run is about −10 mm, and it occurs during Return, while the body is moving back onto four feet. It is not the margin during the circle. Those are results for this model and these gains.
+
+Physics experiment time stays separate from the creative score. Changing the radius, the duration, or the direction does not rewrite the sketch.
+
+## Implemented in Phase 05D
+
+Creative Score Tracking uses the same torque controller as Drawing in the Air. The stages are Stand, Shift, Lift, Track Creative Score, Hold, Return. Motors Off, Posture Hold, Three-Leg Stance, and Drawing in the Air stay available. The physical drawing leg is the front-left leg. The other three legs stay on the stance controller.
+
+The sandbox is the only place that evaluates `motion(t)`. The host asks it for a bounded list of times, in chunks of at most 32, and keeps a versioned buffer. A reply from another run, another parameter revision, or an older request is discarded. The MuJoCo worker receives the samples. It does not receive sketch source. If sampling fails, or the selected brush does not move, the experiment does not start and no path is invented. Choosing the other brush is a separate action. The interface names the brush that is ignored.
+
+The buffer is canvas space. At the end of Lift the worker maps it around the commanded front-left foot target. The longer canvas side maps to the gesture envelope. The shorter side keeps the canvas proportions. The default envelope is 20 mm, so a 600×600 canvas becomes 20 mm × 20 mm. That envelope is not the 0.20 m paper, and the drawing is not resized to the reachable workspace. The height is the aerial plane from the lift, the same plane the circle uses. Contact is kept as metadata. It does not create a paper collision and it does not leave ink. Brush-up travel stays in the command and is drawn as its own line. A sample step larger than 12% of the canvas diagonal is held instead of blended. Contact itself is never blended.
+
+The foot does not jump to the first score point. For one second, by default, it moves from the lift pose to that point with a smootherstep. If the first mapped point is outside the geometric workspace, tracking does not start. Later unreachable points are reported and are not clipped into a shorter drawing. Three-leg support has to be established before Track. The support legs stay on the commanded body. The front-left target is solved from the measured body pose, then turned into a PD torque. Commands stay inside the MJCF ctrlrange.
+
+Score time and physics time stay separate. A declared `scorePeriod()` is sampled once. A continuous score uses the window control, which defaults to 8 s of score time. Playback rate is score-seconds per physics-second during Track. The stage length is fixed from the rate at the moment Track begins. Raising the rate finishes the score early and then holds the last sample. Lowering it leaves the score unfinished when the stage ends, and the outcome is Failed. Motion diagnostics keep their own sample clock.
+
+Completed still requires the three-leg measurements. Track adds its own: the front-left foot stays up, the three support feet stay down, the first target was reachable, later targets stay reachable, the selected score is played through, and the maximum foot-frame error stays within 8 mm. That 8 mm is the same evaluation threshold as the circle. It is not a motor rating. Reaching the end of the stage is not enough.
+
+In the browser, Simple Line at 1× on the 20 mm envelope completed. The maximum foot-frame error was 5.5 mm and the root-mean-square error was 4.3 mm. The score cursor reached the declared 8.17 s. During tracking the lowest FR–RL–RR margin was 72 mm, roll and pitch stayed within 2.5° and 0.3°, and the largest torque was 11.0 Nm. Over the whole run the largest roll was 4.5°, the largest pitch was 3.0°, and the largest torque was 14.9 Nm. No command saturated. The front-left foot returned to the floor and the body height was 0.264 m. The lowest three-leg margin was −11 mm, during Return. The creative timeline stayed paused at 5.60 s while the physics clock ran to 18.17 s.
+
+Concentric Circles also completed in the browser. Its 28.40 s period needed 569 samples at 0.05 s, so the interval was widened to 0.089 s and the panel said so. The maximum error was 5.2 mm and the root-mean-square error was 4.3 mm. The tracking margin was 72 mm. Tracking roll and pitch were 2.8° and 0.3°. Tracking torque was 11.0 Nm. The whole run reached 4.5° of roll, 2.6° of pitch, and 14.9 Nm, without saturation. The foot returned to the floor at a body height of 0.263 m. The lowest three-leg margin was −7 mm, again during Return. The creative clock was left playing and had wrapped to about 0.02 s when the physics clock read 38.40 s.
+
+Selecting the right brush on Simple Line, which does not move, reported that the right brush does not move and that the other brush was not used instead. The robot stayed at the home height. Changing the margin dropped the previous trajectory and left `margin: 80` in the sketch source. Stop during Shift reported Interrupted, kept the body at 0.265 m, and said the state was not jumped. Reset restored 0.270 m and 0 Nm. Switching back to Kinematic Preview restored that label and the geometric-paint legend. The Robot workspace still says physical control is not in this phase.
+
+The dark line is brush-down creative instruction. The turquoise line is brush-up travel. The pink line is the measured foot. The tubes are 2 mm thick so the 20 mm gesture can be seen. That thickness is display only. None of the lines is ink.
+
+An automated MuJoCo check drives the same controller with a synthetic buffer, because the worker cannot call the sandbox. That run also completed: 5.25 mm maximum error, 4.21 mm root-mean-square, 71.9 mm tracking margin, 11.03 Nm during tracking, 14.88 Nm in the run, unsaturated, with both a brush-down run and a brush-up run. The browser numbers above are the validation of the real sketches.
+
 ### Still later
 
-- Dynamic tracking of a p5.js brush trajectory.
+- A second physical drawing leg. One creative brush is followed, and it always drives FL.
 - Walking, or a balance controller beyond this stance.
-- Real brush contact and paint deposition.
+- Real brush contact, pressure, and paint deposition.
 - Any claim that a motion is physically safe, and any connection to a Unitree robot.
 
 ## Not in this phase
@@ -134,10 +176,13 @@ The same Three.js robot draws the simulated body. The turquoise loop is the conv
 - Motion diagnostics call `motion(t)` without redrawing. A sketch whose motion reads the canvas can disagree with the painted frame. The included scores are functions of time. The derivative of a jump is an estimate on the sample grid, not a measured motor speed.
 - Paint in the kinematic viewport is geometric proximity, not contact physics. A lifted move does not leave a mark. MuJoCo contacts are a separate experiment and are not paint.
 - Physics keeps up with the shared clock only as fast as 16 steps per turn. A long seek shows a replaying or integrating state until the model has been stepped to that time. Playback faster than the step budget lags behind the clock instead of skipping the fall.
-- A motion function that reads the canvas can disagree with a physics pose. Physics does not read `motion(t)`.
-- While Posture Hold or Three-Leg Stance is selected, the creative timeline does not move the robot. Physics experiment time is separate. A seek on the score is not a physics rewind.
+- A motion function that reads the canvas can disagree with a physics pose. The MuJoCo worker does not evaluate sketch source. Creative Score Tracking samples `motion(t)` in the sandbox and sends the resulting buffer.
+- While Posture Hold, Three-Leg Stance, Drawing in the Air, or Creative Score Tracking is selected, the creative timeline does not move the robot. Physics experiment time is separate. A seek on the score is not a physics rewind. Playback rate changes the commanded speed only during Track, and the stage length stays at the rate from when tracking began.
 - The default 15 mm lift is a clearance request. The home posture begins with the foot sphere inside the floor, so part of the motion is spent climbing out of that contact. The check’s completed run cleared about 12 mm, which meets the halfway rule and is not the full 15 mm.
 - The support margin is a static measurement. It does not certify that the stance will survive a push, a faster lift, or a different gain.
+- The 8 mm tracking threshold is an evaluation setting for the circle and for Creative Score Tracking. The default circle, Simple Line, and Concentric Circles met it in the checks above. A larger gesture, a faster score, or a different gain can miss it, and the experiment then reports the miss instead of resizing the drawing.
+- The three-leg margin can be negative during Return, while the body moves back onto four feet. In the default circle check that low point is about −10 mm. Simple Line reached about −11 mm and Concentric Circles about −7 mm, both during Return. The margin that belongs to the gesture is the one measured during Draw or Track, about 72 mm in those runs.
+- Creative Score Tracking follows one brush with FL, in the air. The 20 mm envelope is not the 0.20 m paper. Contact does not touch the floor and does not leave ink. A score that would need more than 320 samples is sampled more coarsely, and the panel says the interval was widened. A brush that does not move is reported. The other brush is not substituted.
 - The 3D trail keeps at most 6000 samples. A continuous score longer than that drops the oldest marks. A seek across more than 120 seconds still rebuilds only the latest 120 seconds of the drawing, and the trail follows that rebuild.
 
 ## Run
@@ -149,7 +194,7 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, checks the reachability map, checks motion diagnostics, checks the MuJoCo load, gravity, contacts, and replay, and checks the stance geometry, torque clamp, posture hold, and three-leg schedule. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
+`npm run check` runs Svelte and TypeScript checks. `npm test` samples every example’s `motion(t)`, checks the timeline and message guards, checks Go2 forward kinematics, inverse kinematics, canvas mapping, and trail reconstruction, checks parameter inference, checks the reachability map, checks motion diagnostics, checks the MuJoCo load, gravity, contacts, and replay, checks the stance geometry, torque clamp, posture hold, and three-leg schedule, checks the air-circle geometry, tracking error, and drawing schedule, and checks creative-score mapping, contact steps, stale buffers, and a synthetic tracking run. `npm run build` copies the classic p5 build into `public/vendor` and produces `dist/`.
 
 Sketches persist in `localStorage` under the prefix `doodog`. Clearing site data removes them. Built-in examples are not stored; **Use example** copies one into the library.
 
