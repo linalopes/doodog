@@ -52,6 +52,8 @@ export interface ScoreBuffer {
   interval: number;
   widened: boolean;
   travelPx: number;
+  /** Creative parameter values captured when this buffer was sampled. */
+  paramSnapshot: Record<string, string | number | boolean>;
   points: ScorePoint[];
 }
 
@@ -140,6 +142,7 @@ export function buildScoreBuffer(input: {
   gestureSizeM: number;
   plan: ScorePlan;
   points: ScorePoint[];
+  paramSnapshot?: Record<string, string | number | boolean>;
 }): ScoreBuffer | { error: string } {
   if (input.points.length < 2) return { error: 'The creative score returned fewer than two samples.' };
   for (const point of input.points) {
@@ -173,6 +176,7 @@ export function buildScoreBuffer(input: {
     interval: input.plan.interval,
     widened: input.plan.widened,
     travelPx,
+    paramSnapshot: input.paramSnapshot ?? {},
     points: input.points,
   };
 }

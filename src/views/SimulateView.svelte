@@ -11,6 +11,7 @@
   import DiagnosticsPanel from '../lib/simulate/components/DiagnosticsPanel.svelte';
   import PhysicsDirector from '../lib/simulate/components/PhysicsDirector.svelte';
   import PhysicsPanel from '../lib/simulate/components/PhysicsPanel.svelte';
+  import EvaluationPanel from '../lib/simulate/components/EvaluationPanel.svelte';
   import Timeline from '../lib/simulate/components/Timeline.svelte';
   import { timeline } from '../lib/motion/timeline';
   import { simulationBackend } from '../lib/simulate/physics/backend';
@@ -43,7 +44,7 @@
     physics: {
       title: 'Physics',
       description:
-        'An optional MuJoCo experiment. Motors Off lets the Go2 fall. A torque controller can try a three-leg stance, a circle in the air, or one creative brush with the front-left foot. Nothing here is a safety result.',
+        'An optional MuJoCo experiment. Motors Off lets the Go2 fall. A torque controller can try a three-leg stance, a circle in the air, one creative brush, or a brush approach that stays above the paper. The brush tip is geometry, not contact. Nothing here is a safety result.',
       tag: 'Experimental',
     },
   };
@@ -92,6 +93,7 @@
       <DiagnosticsPanel />
       {#if $simulationBackend === 'mujoco'}
         <PhysicsPanel />
+        <EvaluationPanel />
       {/if}
     </div>
   {:else if current === 'robot-model'}
@@ -99,6 +101,7 @@
   {:else}
     <div class="layout">
       <PhysicsPanel />
+      <EvaluationPanel />
       <p class="muted">
         The robot is drawn in the viewport. Switching to MuJoCo there does not change the sketch
         or its parameters. Kinematic reachability and motion diagnostics stay on the geometric solve.

@@ -13,6 +13,7 @@ import { get } from 'svelte/store';
 import { motionOutput } from '../../motion/output.ts';
 import { seek, setPlayState, timeline } from '../../motion/timeline.ts';
 import { paramRevision } from '../../params/store.ts';
+import { simSettings } from '../go2/settings.ts';
 import { currentScoreEpoch, invalidateScorePreparation, prepareCreativeScore } from './prepareScore.ts';
 import { selectSimulationBackend, simulationBackend } from './backend.ts';
 import { planPhysicsAdvance, physicsRequestedTime } from './clock.ts';
@@ -278,6 +279,18 @@ export async function startExperiment(): Promise<void> {
   const ticket = ++generation;
   const epoch = currentScoreEpoch();
   try {
+    const paper = get(simSettings).paper;
+    const snapped = await current.configure({
+      ...run.config,
+      paperOriginX: paper.origin[0],
+      paperOriginY: paper.origin[1],
+      paperOriginZ: paper.origin[2],
+      paperYawRad: paper.yawRad,
+      paperWidthM: paper.widthM,
+      paperHeightM: paper.heightM,
+    });
+    if (ticket !== generation) return;
+    physicsRun.update((state) => ({ ...state, config: snapped.config, experiment: snapped }));
     if (run.mode === 'score') {
       physicsRun.update((state) => ({
         ...state,
@@ -289,6 +302,7 @@ export async function startExperiment(): Promise<void> {
         channel: run.config.channel,
         gestureSizeM: run.config.gestureSizeM,
         windowSeconds: run.config.trackSeconds,
+        sampleIntervalS: run.config.sampleIntervalS,
       });
       if (ticket !== generation) {
         physicsRun.update((state) => ({ ...state, preparing: false }));

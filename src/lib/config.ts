@@ -25,8 +25,8 @@ export const APP_CONFIG = {
 
   /** Current development phase, shown in the shell. */
   phase: {
-    id: '05D',
-    label: 'Phase 05D · Creative score tracking',
+    id: '05F',
+    label: 'Phase 05F · Brush calibration',
   },
 
   /**

@@ -39,7 +39,10 @@ import {
   clampConfig,
   type ExperimentConfig,
 } from './settings.ts';
-import { analyticalFoot } from '../go2/kinematics.ts';
+import { brushWorld, calibrationFrom, clearanceTarget, paperFrom, pathReachable, solveTipTarget, tipToPaper } from '../go2/brush.ts';
+import { analyticalFoot, forwardLeg } from '../go2/kinematics.ts';
+import { quatMul } from '../go2/math.ts';
+import { emptyEvalLog, noteEvaluation, summarizeEvaluation, type EvalLog, type EvaluationSummary } from './evaluation.ts';
 import {
   copyJoints,
   footWorld,
@@ -58,9 +61,9 @@ import {
 
 export { CLOCK_NOTE, COMPLETION_NOTE };
 
-export type PhysicsMode = 'motors-off' | 'posture-hold' | 'three-leg' | 'air-draw' | 'score';
+export type PhysicsMode = 'motors-off' | 'posture-hold' | 'three-leg' | 'air-draw' | 'score' | 'brush-approach';
 
-export type StanceStage = 'idle' | 'posture' | 'stand' | 'shift' | 'lift' | 'draw' | 'track' | 'hold' | 'return' | 'done';
+export type StanceStage = 'idle' | 'posture' | 'stand' | 'shift' | 'lift' | 'draw' | 'track' | 'approach' | 'hold' | 'return' | 'done';
 
 export type ExperimentOutcome = 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'interrupted';
 
@@ -72,8 +75,24 @@ export interface StageCriteria {
   draw: boolean | null;
   /** Null for experiments that do not track a creative score. */
   track: boolean | null;
+  /** Null unless the run is a brush approach. True when the tip target was reachable and the stance held. */
+  approach: boolean | null;
   hold: boolean | null;
   return: boolean | null;
+}
+
+/** Where the brush approach asked the tip to go. Geometry only. Not a contact. */
+export interface ApproachState {
+  footTarget: Vec3 | null;
+  tipTarget: Vec3 | null;
+  liftFoot: Vec3 | null;
+  geometricErrorM: number | null;
+  reachable: boolean | null;
+  note: string;
+  /** Latest measured tip. A plane distance, not a contact. */
+  measuredTip: Vec3 | null;
+  /** Latest commanded tip. Null when no tip target is being commanded. */
+  commandedTip: Vec3 | null;
 }
 
 /** The creative trajectory, without the canvas samples, for the panel and the view. */
@@ -96,6 +115,7 @@ export interface ScoreInfo {
   interval: number;
   widened: boolean;
   travelPx: number;
+  paramSnapshot: Record<string, string | number | boolean>;
 }
 
 /** Measurements while FL follows one creative brush. Contact is metadata only. */
@@ -231,6 +251,8 @@ export interface ExperimentMemory {
   unreachable: LegId[];
   draw: DrawTrack;
   score: ScoreTrack;
+  approach: ApproachState;
+  evaluation: EvalLog;
   peaks: ExperimentPeaks;
 }
 
@@ -251,6 +273,8 @@ export interface ExperimentView {
   unreachable: LegId[];
   draw: DrawTrack;
   score: ScoreView;
+  approach: ApproachState;
+  evaluation: EvaluationSummary;
   peaks: ExperimentPeaks;
   /** Root-mean-square foot-frame error over the Draw samples. Null before Draw. */
   rmsErrorM: number | null;
@@ -269,9 +293,23 @@ const EMPTY_CRITERIA: StageCriteria = {
   lift: null,
   draw: null,
   track: null,
+  approach: null,
   hold: null,
   return: null,
 };
+
+function emptyApproach(): ApproachState {
+  return {
+    footTarget: null,
+    tipTarget: null,
+    liftFoot: null,
+    geometricErrorM: null,
+    reachable: null,
+    note: '',
+    measuredTip: null,
+    commandedTip: null,
+  };
+}
 
 const SCORE_SLOT_COUNT = 160;
 
@@ -340,6 +378,7 @@ function scoreInfo(buffer: ScoreBuffer | null): ScoreInfo | null {
     interval: buffer.interval,
     widened: buffer.widened,
     travelPx: buffer.travelPx,
+    paramSnapshot: { ...buffer.paramSnapshot },
   };
 }
 
@@ -443,6 +482,8 @@ export function createMemory(config: ExperimentConfig = DEFAULT_EXPERIMENT): Exp
     unreachable: [],
     draw: emptyDraw(),
     score: emptyScore(),
+    approach: emptyApproach(),
+    evaluation: emptyEvalLog(),
     peaks: emptyPeaks(),
   };
 }
@@ -466,6 +507,15 @@ export function viewOf(memory: ExperimentMemory): ExperimentView {
     unreachable: [...memory.unreachable],
     draw,
     score: viewScore(memory.score),
+    approach: {
+      ...memory.approach,
+      footTarget: memory.approach.footTarget ? copyVec(memory.approach.footTarget) : null,
+      tipTarget: memory.approach.tipTarget ? copyVec(memory.approach.tipTarget) : null,
+      liftFoot: memory.approach.liftFoot ? copyVec(memory.approach.liftFoot) : null,
+      measuredTip: memory.approach.measuredTip ? copyVec(memory.approach.measuredTip) : null,
+      commandedTip: memory.approach.commandedTip ? copyVec(memory.approach.commandedTip) : null,
+    },
+    evaluation: summarizeEvaluation(memory.evaluation.points),
     peaks: { ...memory.peaks },
     rmsErrorM: rmsError(draw.errorSumSq, draw.samples),
   };
@@ -485,6 +535,8 @@ export function changeMode(memory: ExperimentMemory, mode: PhysicsMode): Experim
   next.draw = emptyDraw();
   next.score = emptyScore();
   next.score.playbackRate = memory.score.playbackRate;
+  next.approach = emptyApproach();
+  next.evaluation = emptyEvalLog();
   if (memory.playback === 'playing' || memory.outcome === 'running' || memory.outcome === 'paused') {
     next.outcome = 'interrupted';
     next.reason = 'The controller mode changed. The physics state was not jumped.';
@@ -510,6 +562,8 @@ export function begin(memory: ExperimentMemory, sample: PhysicsSnapshot): Experi
   next.unreachable = [];
   next.draw = emptyDraw();
   next.peaks = emptyPeaks();
+  next.evaluation = emptyEvalLog();
+  next.approach = emptyApproach();
   next.score = emptyScore();
   next.score.buffer = memory.score.buffer;
   next.score.playbackRate = memory.score.playbackRate;
@@ -623,7 +677,7 @@ export function commandFrom(
 
   if (next.playback !== 'playing') {
     if (next.outcome === 'completed' && next.targets) {
-      const held = jointPd(sample.joints, sample.jointVelocity, next.targets, next.targets, ranges, dt);
+      const held = jointPd(sample.joints, sample.jointVelocity, next.targets, next.targets, ranges, dt, next.config.gainScale);
       return { memory: next, torques: held.torques, integrate: false };
     }
     return { memory: next, torques: zeros, integrate: false };
@@ -631,14 +685,22 @@ export function commandFrom(
 
   const plan = planTargets(next, sample);
   const limited = limitJointStep(next.targets, plan.joints, dt);
-  const pd = jointPd(sample.joints, sample.jointVelocity, limited, next.targets, ranges, dt);
+  const pd = jointPd(sample.joints, sample.jointVelocity, limited, next.targets, ranges, dt, next.config.gainScale);
   next.targets = limited;
   next.flTarget = plan.flTarget;
   next.unreachable = plan.unreachable;
   if (next.stage === 'draw' && plan.flTarget) observeDraw(next, sample, plan.flTarget, plan.unreachable.includes('FL'));
   if (next.stage === 'track' && plan.flTarget) observeScore(next, sample, plan.flTarget, plan.unreachable.includes('FL'));
+  if ((next.stage === 'approach' || next.stage === 'hold') && next.mode === 'brush-approach' && next.criteria.approach === true) {
+    const held = sample.support.threeLegFeetDown && !sample.feet.FL.onFloor && sample.basePosition[2] >= STANCE_CRITERIA.moveHeightM;
+    if (!held) {
+      next.criteria.approach = false;
+      remember(next, 'The brush approach lost three-leg support or the front-left foot touched down.');
+    }
+  }
   next.stageTime += dt;
   next.elapsed += dt;
+  recordFoot(next, sample, plan.flTarget, limited);
   return { memory: next, torques: pd.torques, integrate: true };
 }
 
@@ -713,6 +775,10 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
       }
       return;
     }
+    if (memory.mode === 'brush-approach') {
+      beginApproach(memory, sample);
+      return;
+    }
     memory.stage = 'hold';
     memory.criteria.hold = holdOk(sample, memory);
     memory.reason = 'Hold: keeping the front-left foot up.';
@@ -732,6 +798,13 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
     memory.stageTime = 0;
     memory.criteria.hold = holdOk(sample, memory);
     memory.reason = 'Hold: keeping the foot at the end of the creative score.';
+    return;
+  }
+  if (memory.stage === 'approach') {
+    memory.stage = 'hold';
+    memory.stageTime = 0;
+    memory.criteria.hold = holdOk(sample, memory);
+    memory.reason = 'Hold: keeping the brush tip at the clearance above the paper. This is not contact.';
     return;
   }
   if (memory.stage === 'hold') {
@@ -761,7 +834,9 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
         ? memory.criteria.draw === true
         : memory.mode === 'score'
           ? memory.criteria.track === true
-          : true;
+          : memory.mode === 'brush-approach'
+            ? memory.criteria.approach === true
+            : true;
     const passed = stancePassed && gesturePassed;
     memory.outcome = passed ? 'completed' : 'failed';
     memory.reason = passed
@@ -769,9 +844,68 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
         ? 'Completed. Every stage met its measurements, including the draw tracking threshold. This is not dynamic stability and it is not a safety result.'
         : memory.mode === 'score'
           ? 'Completed. Every stage met its measurements, including the creative-score tracking threshold. This is not dynamic stability and it is not a safety result.'
-          : 'Completed. Every stage met its measurements. This is not dynamic stability and it is not a safety result.'
+          : memory.mode === 'brush-approach'
+            ? 'Completed. The tip target was reachable and the stance held. The clearance is a plane distance, not contact, and this is not a safety result.'
+            : 'Completed. Every stage met its measurements. This is not dynamic stability and it is not a safety result.'
       : memory.failure || 'The schedule finished without meeting every measurement.';
   }
+}
+
+function beginApproach(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
+  const supported = memory.criteria.stand === true && memory.criteria.shift === true && memory.criteria.lift === true;
+  const fail = (note: string) => {
+    memory.criteria.approach = false;
+    memory.approach.reachable = false;
+    memory.approach.note = note;
+    memory.playback = 'paused';
+    memory.stage = 'done';
+    memory.outcome = 'failed';
+    memory.failure = note;
+    memory.reason = note;
+  };
+  if (!supported || !memory.planted) {
+    fail('Three-leg support was not established, so the brush approach did not start. The paper was not moved.');
+    return;
+  }
+  const planted = memory.planted;
+  const buried = Math.max(0, -planted.flClearanceM);
+  const liftFoot: Vec3 = [
+    planted.feet.FL[0],
+    planted.feet.FL[1],
+    planted.feet.FL[2] + memory.config.liftHeightM + buried,
+  ];
+  const body: Vec3 = [
+    planted.body[0] + planted.shift[0],
+    planted.body[1] + planted.shift[1],
+    planted.body[2],
+  ];
+  const paper = paperFrom(memory.config);
+  const target = clearanceTarget(paper, memory.config.brushClearanceM);
+  const solved = solveTipTarget(body, planted.orientation, target, calibrationFrom(memory.config), sample.joints.FL);
+  const path = pathReachable(body, planted.orientation, liftFoot, solved.foot);
+  memory.approach.geometricErrorM = solved.errorM;
+  memory.approach.liftFoot = liftFoot;
+  memory.approach.tipTarget = [target[0], target[1], target[2]];
+  memory.approach.footTarget = [solved.foot[0], solved.foot[1], solved.foot[2]];
+  if (!solved.reachable || !path) {
+    const gap = (solved.errorM * 1000).toFixed(1);
+    fail(
+      `The brush tip cannot reach ${(memory.config.brushClearanceM * 1000).toFixed(0)} mm above the paper centre from this stance and calibration. The geometric gap is ${gap} mm. The paper was not moved and the pose was not jumped.`,
+    );
+    return;
+  }
+  if (solved.foot[2] < liftFoot[2] - 1e-4) {
+    fail(
+      `The brush tip meets ${(memory.config.brushClearanceM * 1000).toFixed(0)} mm above the paper only by lowering the front-left foot to ${(solved.foot[2] * 1000).toFixed(1)} mm, below the lifted foot at ${(liftFoot[2] * 1000).toFixed(1)} mm. The approach does not start. The paper was not moved and the pose was not jumped.`,
+    );
+    return;
+  }
+  memory.approach.reachable = true;
+  memory.approach.note = 'The tip target is inside the geometric workspace. The move has not touched the paper.';
+  memory.criteria.approach = true;
+  memory.stage = 'approach';
+  memory.stageTime = 0;
+  memory.reason = 'Approach: moving the brush tip toward the clearance above the paper. This is not contact.';
 }
 
 function planTargets(
@@ -815,21 +949,66 @@ function planTargets(
   if ((scoreHold || scoreReturn) && memory.score.holdTarget) {
     const end = memory.score.holdTarget;
     const home = planted.feet.FL;
-    const blendOut = scoreHold ? 1 : 1 - smoothstep(progress(memory));
-    feet.FL = [
-      home[0] + (end[0] - home[0]) * blendOut,
-      home[1] + (end[1] - home[1]) * blendOut,
-      home[2] + (end[2] - home[2]) * blendOut,
-    ];
+    if (scoreReturn && memory.config.returnStyle === 'gradual') {
+      const unit = progress(memory);
+      const horizontal = unit <= 0.5 ? 1 : 1 - smoothstep((unit - 0.5) / 0.5);
+      const vertical = unit >= 0.5 ? 0 : 1 - smoothstep(unit / 0.5);
+      feet.FL = [
+        home[0] + (end[0] - home[0]) * horizontal,
+        home[1] + (end[1] - home[1]) * horizontal,
+        home[2] + (end[2] - home[2]) * vertical,
+      ];
+    } else {
+      const blendOut = scoreHold ? 1 : 1 - smoothstep(progress(memory));
+      feet.FL = [
+        home[0] + (end[0] - home[0]) * blendOut,
+        home[1] + (end[1] - home[1]) * blendOut,
+        home[2] + (end[2] - home[2]) * blendOut,
+      ];
+    }
+  }
+  const approachMove = memory.mode === 'brush-approach' && memory.stage === 'approach' && memory.approach.footTarget !== null && memory.approach.liftFoot !== null;
+  const approachHold = memory.mode === 'brush-approach' && memory.stage === 'hold' && memory.approach.footTarget !== null;
+  const approachReturn = memory.mode === 'brush-approach' && memory.stage === 'return' && memory.approach.footTarget !== null;
+  if ((approachMove || approachHold || approachReturn) && memory.approach.footTarget && memory.approach.liftFoot) {
+    const start = memory.approach.liftFoot;
+    const end = memory.approach.footTarget;
+    const home = planted.feet.FL;
+    if (approachMove) {
+      const unit = smoothstep(progress(memory));
+      feet.FL = [
+        start[0] + (end[0] - start[0]) * unit,
+        start[1] + (end[1] - start[1]) * unit,
+        start[2] + (end[2] - start[2]) * unit,
+      ];
+    } else if (approachReturn && memory.config.returnStyle === 'gradual') {
+      const unit = progress(memory);
+      const horizontal = unit <= 0.5 ? 1 : 1 - smoothstep((unit - 0.5) / 0.5);
+      const vertical = unit >= 0.5 ? 0 : 1 - smoothstep(unit / 0.5);
+      feet.FL = [
+        home[0] + (end[0] - home[0]) * horizontal,
+        home[1] + (end[1] - home[1]) * horizontal,
+        home[2] + (end[2] - home[2]) * vertical,
+      ];
+    } else if (approachReturn) {
+      const blendOut = 1 - smoothstep(progress(memory));
+      feet.FL = [
+        home[0] + (end[0] - home[0]) * blendOut,
+        home[1] + (end[1] - home[1]) * blendOut,
+        home[2] + (end[2] - home[2]) * blendOut,
+      ];
+    } else {
+      feet.FL = [end[0], end[1], end[2]];
+    }
   }
   const solved = jointsForFeet(body, planted.orientation, feet);
-  if (liftScale > 0.02 || drawing || tracking || scoreHold) {
+  if (liftScale > 0.02 || drawing || tracking || scoreHold || approachMove || approachHold) {
     // Support legs stay on the commanded body so the shift holds. The lifted
     // foot is solved from the measured body, so a lower body does not leave
     // the foot on the floor. An unreachable point is reported, not shrunk.
     applyMeasuredFoot(solved, sample, feet.FL);
   }
-  const showTarget = liftScale > 0 || drawing || tracking || scoreHold || scoreReturn;
+  const showTarget = liftScale > 0 || drawing || tracking || scoreHold || scoreReturn || approachMove || approachHold || approachReturn;
   return { joints: solved.joints, flTarget: showTarget ? feet.FL : null, unreachable: solved.unreachable };
 }
 
@@ -850,7 +1029,12 @@ function applyMeasuredFoot(
 }
 
 function blend(memory: ExperimentMemory, kind: 'shift' | 'lift'): number {
-  if (memory.stage === 'hold' || memory.stage === 'draw' || memory.stage === 'track') return 1;
+  if (memory.stage === 'hold' || memory.stage === 'draw' || memory.stage === 'track' || memory.stage === 'approach') return 1;
+  if (memory.stage === 'return' && memory.config.returnStyle === 'gradual') {
+    const unit = progress(memory);
+    if (kind === 'lift') return unit >= 0.5 ? 0 : 1 - smoothstep(unit / 0.5);
+    return unit <= 0.5 ? 1 : 1 - smoothstep((unit - 0.5) / 0.5);
+  }
   if (memory.stage === 'return') return 1 - smoothstep(progress(memory));
   if (memory.stage === kind) return smoothstep(progress(memory));
   if (kind === 'shift' && memory.stage === 'lift') return 1;
@@ -874,6 +1058,7 @@ function stageDuration(memory: ExperimentMemory): number | null {
     const rate = memory.score.entryRate > 0 ? memory.score.entryRate : memory.score.playbackRate;
     return trackStageSeconds(buffer, rate, memory.config.approachSeconds);
   }
+  if (memory.stage === 'approach') return memory.config.brushMoveSeconds;
   if (memory.stage === 'hold') return memory.config.holdSeconds;
   if (memory.stage === 'return') return memory.config.returnSeconds;
   return null;
@@ -1175,6 +1360,51 @@ function observeScore(memory: ExperimentMemory, sample: PhysicsSnapshot, desired
   track.achievedDepthM = span?.depthM ?? null;
 }
 
+function recordFoot(memory: ExperimentMemory, sample: PhysicsSnapshot, target: Vec3 | null, joints: Go2JointState): void {
+  const measured = footWorld(sample, 'FL');
+  const desired = target ?? measured;
+  const support = sample.support.feet;
+  const calibration = calibrationFrom(memory.config);
+  const paper = paperFrom(memory.config);
+  const measuredTip = brushWorld(sample.feet.FL.frame, sample.feet.FL.frameQuat, calibration).tip;
+  const relation = tipToPaper(measuredTip, paper);
+  const tipStage =
+    target !== null &&
+    (memory.stage === 'draw' ||
+      memory.stage === 'track' ||
+      memory.stage === 'approach' ||
+      memory.stage === 'hold');
+  const footQuat = quatMul(sample.baseQuaternion, forwardLeg('FL', joints.FL, [0, 0, 0]).footRotation);
+  const commandedTip = target ? brushWorld(target, footQuat, calibration).tip : null;
+  memory.approach.measuredTip = [measuredTip[0], measuredTip[1], measuredTip[2]];
+  memory.approach.commandedTip = commandedTip ? [commandedTip[0], commandedTip[1], commandedTip[2]] : null;
+  noteEvaluation(memory.evaluation, {
+    t: memory.elapsed,
+    stage: memory.stage,
+    desired: [desired[0], desired[1], desired[2]],
+    measured: [measured[0], measured[1], measured[2]],
+    body: [sample.basePosition[0], sample.basePosition[1], sample.basePosition[2]],
+    roll: sample.rollRad,
+    pitch: sample.pitchRad,
+    torque: sample.maxAbsTorqueNm,
+    saturated: sample.saturated,
+    margin3: sample.support.threeLegMarginM,
+    margin4: sample.support.marginM,
+    supportCount: support.length,
+    supportLost: !support.includes('FR') || !support.includes('RL') || !support.includes('RR'),
+    flDown: sample.feet.FL.onFloor,
+    commanded: target !== null && (memory.stage === 'draw' || memory.stage === 'track'),
+    jointDesired: [joints.FL[0], joints.FL[1], joints.FL[2]],
+    jointMeasured: [sample.joints.FL[0], sample.joints.FL[1], sample.joints.FL[2]],
+    tipDesired: tipStage && commandedTip ? [commandedTip[0], commandedTip[1], commandedTip[2]] : null,
+    tipMeasured: [measuredTip[0], measuredTip[1], measuredTip[2]],
+    tipClearanceM: relation.signedM,
+    tipInside: relation.inside,
+    tipSide: relation.side,
+    tipCommanded: tipStage && commandedTip !== null,
+  });
+}
+
 function observeDraw(memory: ExperimentMemory, sample: PhysicsSnapshot, desired: Vec3, unreachable: boolean): void {
   const track = memory.draw;
   const achieved = footWorld(sample, 'FL');
@@ -1234,6 +1464,8 @@ function fresh(memory: ExperimentMemory): ExperimentMemory {
     unreachable: [...memory.unreachable],
     draw: copyDraw(memory.draw),
     score: shareScore(memory.score),
+    approach: memory.approach,
+    evaluation: memory.evaluation,
     peaks: { ...memory.peaks },
   };
 }

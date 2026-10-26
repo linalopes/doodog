@@ -12,6 +12,7 @@
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as THREE from 'three';
+import { brushTipInFoot, type BrushCalibration } from '../go2/brush.ts';
 import type { BrushMount } from '../go2/defaults.ts';
 import type { Vec3 } from '../go2/math.ts';
 import {
@@ -51,6 +52,10 @@ export interface PhysicsGuide {
   brushDown: readonly (readonly Vec3[])[];
   /** Creative brush-up travel. Not ink, and not discarded. */
   brushUp: readonly (readonly Vec3[])[];
+  /** Measured brush tip in the world. Geometry, not contact. */
+  tipMeasured: Vec3 | null;
+  /** Commanded brush tip in the world. Geometry, not contact. */
+  tipDesired: Vec3 | null;
 }
 
 export interface Go2View {
@@ -65,6 +70,8 @@ export interface Go2View {
   setMarks(marks: readonly TrailMark[]): void;
   setHelpers(grid: boolean, frames: boolean): void;
   setBrushes(left: BrushMount, right: BrushMount): void;
+  /** Places the FL shaft from the attachment to the tip. Null keeps the kinematic mount. */
+  setBrushCalibration(calibration: BrushCalibration | null): void;
   setView(view: CameraView): void;
   resize(): void;
   dispose(): void;
@@ -77,6 +84,7 @@ interface LegNodes {
   brush: THREE.Group;
   shaft: THREE.Mesh;
   tip: THREE.Mesh;
+  attachment: THREE.Mesh;
 }
 
 const X_AXIS = new THREE.Vector3(1, 0, 0);
@@ -199,12 +207,22 @@ export function createGo2View(
   );
   comDot.visible = false;
   targetDot.visible = false;
+  const measuredTipDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.009, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xea7dff }),
+  );
+  const desiredTipDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.009, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x08f2db }),
+  );
+  measuredTipDot.visible = false;
+  desiredTipDot.visible = false;
   const desiredTube = pathTube(0x22113e);
   const achievedTube = pathTube(0xea7dff);
   const downTubes = [pathTube(0x22113e), pathTube(0x22113e), pathTube(0x22113e), pathTube(0x22113e)];
   const upTubes = [pathTube(0x08f2db), pathTube(0x08f2db), pathTube(0x08f2db), pathTube(0x08f2db)];
   for (const tube of [...downTubes, ...upTubes]) scene.add(tube);
-  scene.add(comDot, targetDot, desiredTube, achievedTube);
+  scene.add(comDot, targetDot, measuredTipDot, desiredTipDot, desiredTube, achievedTube);
 
   const legs: Partial<Record<LegId, LegNodes>> = {};
 
@@ -258,6 +276,37 @@ export function createGo2View(
   function setBrushes(left: BrushMount, right: BrushMount): void {
     placeBrush(legs.FL, left, 0x22113e);
     placeBrush(legs.FR, right, 0xea7dff);
+    requestRender();
+  }
+
+  function setBrushCalibration(calibration: BrushCalibration | null): void {
+    const nodes = legs.FL;
+    if (!nodes) return;
+    if (!calibration) {
+      nodes.attachment.position.set(0, 0, 0);
+      nodes.attachment.visible = nodes.brush.visible;
+      requestRender();
+      return;
+    }
+    const localTip = brushTipInFoot(calibration);
+    const mount = new THREE.Vector3(calibration.mountOffset[0], calibration.mountOffset[1], calibration.mountOffset[2]);
+    const tip = new THREE.Vector3(localTip[0], localTip[1], localTip[2]);
+    const direction = tip.clone().sub(mount);
+    const length = Math.max(direction.length(), 0.001);
+    direction.normalize();
+    nodes.brush.visible = true;
+    nodes.shaft.scale.set(1, length, 1);
+    nodes.shaft.position.copy(mount).addScaledVector(direction, length * 0.5);
+    nodes.shaft.quaternion.setFromUnitVectors(Y_AXIS, direction);
+    nodes.tip.position.copy(tip);
+    nodes.attachment.position.copy(mount);
+    nodes.attachment.visible = true;
+    const shaftMaterial = nodes.shaft.material;
+    const tipMaterial = nodes.tip.material;
+    const attachmentMaterial = nodes.attachment.material;
+    if (shaftMaterial instanceof THREE.MeshStandardMaterial) shaftMaterial.color.setHex(0x22113e);
+    if (tipMaterial instanceof THREE.MeshStandardMaterial) tipMaterial.color.setHex(0xea7dff);
+    if (attachmentMaterial instanceof THREE.MeshStandardMaterial) attachmentMaterial.color.setHex(0x08f2db);
     requestRender();
   }
 
@@ -332,6 +381,18 @@ export function createGo2View(
       targetDot.visible = false;
       setSegments(lines.target, []);
     }
+    if (guide?.tipMeasured) {
+      measuredTipDot.visible = true;
+      measuredTipDot.position.set(guide.tipMeasured[0], guide.tipMeasured[1], guide.tipMeasured[2]);
+    } else {
+      measuredTipDot.visible = false;
+    }
+    if (guide?.tipDesired) {
+      desiredTipDot.visible = true;
+      desiredTipDot.position.set(guide.tipDesired[0], guide.tipDesired[1], guide.tipDesired[2]);
+    } else {
+      desiredTipDot.visible = false;
+    }
     setTube(desiredTube, guide?.desiredPath ?? []);
     setTube(achievedTube, guide?.achievedPath ?? []);
     downTubes.forEach((tube, index) => setTube(tube, guide?.brushDown?.[index] ?? []));
@@ -375,6 +436,7 @@ export function createGo2View(
     setMarks,
     setHelpers,
     setBrushes,
+    setBrushCalibration,
     setView,
     resize,
     dispose() {
@@ -473,13 +535,17 @@ export function createGo2View(
         new THREE.SphereGeometry(0.008, 16, 12),
         new THREE.MeshStandardMaterial({ color: 0xea7dff, roughness: 0.4 }),
       );
-      brush.add(shaft, tip);
+      const attachment = new THREE.Mesh(
+        new THREE.SphereGeometry(0.006, 12, 10),
+        new THREE.MeshStandardMaterial({ color: 0x08f2db, roughness: 0.4 }),
+      );
+      brush.add(shaft, tip, attachment);
       foot.add(brush);
       knee.add(foot);
       hip.add(knee);
       abduction.add(hip);
       robot.add(abduction);
-      legs[id] = { abduction, hip, knee, brush, shaft, tip };
+      legs[id] = { abduction, hip, knee, brush, shaft, tip, attachment };
     }
   }
 }

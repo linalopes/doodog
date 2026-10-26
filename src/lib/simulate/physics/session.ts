@@ -9,6 +9,8 @@
 
 import loadMujoco from '@mujoco/mujoco';
 import type { Go2JointState } from '../adapters/types.ts';
+import { quatRotate } from '../go2/math.ts';
+import { LEGS } from '../go2/model.ts';
 import { rollPitch } from './attitude.ts';
 import { FLOOR_NOTE, TORQUE_NOTE, go2FloorSceneXml } from './scene.ts';
 import { FOOT_RADIUS_M } from './settings.ts';
@@ -334,6 +336,15 @@ function readFeet(
   for (const id of JOINT_ORDER) {
     const sphere = vec3(data.geom(id).xpos);
     const bucket = totals[id];
+    const calf = data.body(`${id}_calf`);
+    const frameQuat: [number, number, number, number] = [
+      Number(calf.xquat[0]),
+      Number(calf.xquat[1]),
+      Number(calf.xquat[2]),
+      Number(calf.xquat[3]),
+    ];
+    const calfPosition = vec3(calf.xpos);
+    const footOffset = quatRotate(frameQuat, LEGS[id].footInCalf);
     feet[id] = {
       sphere,
       clearanceM: sphere[2] - FOOT_RADIUS_M,
@@ -342,6 +353,12 @@ function readFeet(
         bucket.count > 0
           ? [bucket.x / bucket.count, bucket.y / bucket.count, bucket.z / bucket.count]
           : null,
+      frame: [
+        calfPosition[0] + footOffset[0],
+        calfPosition[1] + footOffset[1],
+        calfPosition[2] + footOffset[2],
+      ],
+      frameQuat,
     };
   }
   return { feet, contacts, contactCount };

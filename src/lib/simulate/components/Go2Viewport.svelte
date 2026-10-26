@@ -4,6 +4,7 @@
   import { motionTrail } from '../../motion/trail';
   import type { MotionFrame } from '../../motion/types';
   import type { SimConfig } from '../go2/defaults';
+  import { brushWorld, calibrationFrom } from '../go2/brush';
   import { interpretFrame, PREVIEW_LABEL, type TrailMark } from '../go2/pose';
   import { kinematicPose, setHelper, simSettings } from '../go2/settings';
   import { simulationBackend, selectSimulationBackend } from '../physics/backend';
@@ -92,6 +93,8 @@
     view.setHelpers(config.showGrid, config.showFrames);
     view.setBrushes(config.brushes.left, config.brushes.right);
     const physics = $simulationBackend === 'mujoco' ? $physicsRun.snapshot : null;
+    if (physics) view.setBrushCalibration(calibrationFrom($physicsRun.config));
+    else view.setBrushCalibration(null);
     const experiment = $simulationBackend === 'mujoco' ? $physicsRun.experiment : null;
     let marks: TrailMark[] = [];
     if (physics) {
@@ -103,15 +106,20 @@
       });
       const drawing = $physicsRun.mode === 'air-draw';
       const scoring = $physicsRun.mode === 'score';
+      const approaching = $physicsRun.mode === 'brush-approach';
+      const calibration = calibrationFrom($physicsRun.config);
+      const measuredTip = brushWorld(physics.feet.FL.frame, physics.feet.FL.frameQuat, calibration).tip;
       view.setPhysicsGuide({
         support: physics.support.polygon,
-        triangle: $physicsRun.mode === 'three-leg' || drawing || scoring ? physics.support.threeLegTriangle : [],
+        triangle: $physicsRun.mode === 'three-leg' || drawing || scoring || approaching ? physics.support.threeLegTriangle : [],
         com: physics.support.com,
         flTarget: experiment?.flTarget ?? null,
         desiredPath: drawing ? (experiment?.draw.desired ?? []) : [],
         achievedPath: drawing ? (experiment?.draw.achieved ?? []) : scoring ? (experiment?.score.achieved ?? []) : [],
         brushDown: scoring ? (experiment?.score.desiredContact ?? []) : [],
         brushUp: scoring ? (experiment?.score.desiredTravel ?? []) : [],
+        tipMeasured: measuredTip,
+        tipDesired: experiment?.approach.commandedTip ?? experiment?.approach.tipTarget ?? null,
       });
       if (!trailsHidden) {
         view.setMarks([]);
@@ -151,6 +159,7 @@
     lift: 'Lift',
     draw: 'Draw',
     track: 'Track Creative Score',
+    approach: 'Approach',
     hold: 'Hold',
     return: 'Return',
     done: 'Finished',
@@ -162,6 +171,9 @@
 
   <div class="viewport__overlay">
     <p class="viewport__banner">{physicsLive ? PHYSICS_LABEL : PREVIEW_LABEL}</p>
+    {#if physicsLive}
+      <p class="viewport__banner">Brush Geometry Preview — No Contact Physics</p>
+    {/if}
     {#if physicsLive && $physicsRun.snapshot}
       <p class="viewport__note">
         {#if controlled && experiment}
@@ -171,6 +183,9 @@
           {/if}
           {#if experiment.mode === 'score'}
             The purple line is the creative brush-down path, the turquoise line is brush-up travel, and the pink line is the measured foot. None of these lines is ink. The other creative brush is ignored. The physical drawing leg is FL.
+          {/if}
+          {#if experiment.mode === 'brush-approach'}
+            The turquoise marker is the commanded brush tip and the pink marker is the measured tip. A tip below the sheet is a signed distance, not contact.
           {/if}
           This is not a safe path, and geometric paint is hidden.
         {:else}
@@ -262,7 +277,9 @@
         <span><i class="swatch swatch--achieved"></i> Measured support</span>
         <span><i class="swatch swatch--desired"></i> FR–RL–RR triangle</span>
         <span><i class="swatch swatch--paint"></i> Centre of mass</span>
-        <span><i class="swatch swatch--target"></i> FL target</span>
+        <span><i class="swatch swatch--target"></i> FL foot target</span>
+        <span><i class="swatch swatch--foot"></i> Measured brush tip</span>
+        <span><i class="swatch swatch--achieved"></i> Commanded brush tip</span>
         {#if experiment?.mode === 'air-draw'}
           <span><i class="swatch swatch--circle"></i> Requested circle</span>
           <span><i class="swatch swatch--foot"></i> Measured foot</span>

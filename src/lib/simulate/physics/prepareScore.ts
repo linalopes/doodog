@@ -11,7 +11,7 @@ import { acceptMotionBatch } from '../diagnostics/analyze.ts';
 import { motionOutput } from '../../motion/output.ts';
 import { timeline } from '../../motion/timeline.ts';
 import { onMotionBatch, requestMotionBatch, type MotionBatchMessage } from '../../p5/motionBatch.ts';
-import { paramRevision } from '../../params/store.ts';
+import { creativeParams, paramRevision } from '../../params/store.ts';
 import { activeSketch } from '../../sketches/store.ts';
 import { ASSUMED_CANVAS } from '../go2/defaults.ts';
 import { buildScoreBuffer, planScoreTimes, type ScoreBuffer, type ScoreChannel, type ScorePoint } from './score.ts';
@@ -39,6 +39,7 @@ export async function prepareCreativeScore(input: {
   channel: ScoreChannel;
   gestureSizeM: number;
   windowSeconds: number;
+  sampleIntervalS?: number;
 }): Promise<PrepareResult> {
   const token = ++prepareToken;
   const output = get(motionOutput);
@@ -54,6 +55,7 @@ export async function prepareCreativeScore(input: {
   const plan = planScoreTimes({
     durationSeconds: clock.durationSeconds,
     windowSeconds: input.windowSeconds,
+    interval: input.sampleIntervalS,
   });
   if (plan.times.length < 2) {
     return { ok: false, reason: 'The creative score has no interval to sample. No path was invented.' };
@@ -106,9 +108,20 @@ export async function prepareCreativeScore(input: {
     gestureSizeM: input.gestureSizeM,
     plan,
     points,
+    paramSnapshot: snapshotParams(),
   });
   if ('error' in built) return { ok: false, reason: built.error };
   return { ok: true, buffer: built };
+}
+
+function snapshotParams(): Record<string, string | number | boolean> {
+  const values = get(creativeParams).values;
+  const snapshot: Record<string, string | number | boolean> = {};
+  for (const key of Object.keys(values).slice(0, 24)) {
+    const value = values[key];
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') snapshot[key] = value;
+  }
+  return snapshot;
 }
 
 function requestChunk(times: number[], ticket: number, revision: number, runId: string): Promise<MotionBatchMessage> {

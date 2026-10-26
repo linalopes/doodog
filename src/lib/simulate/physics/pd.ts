@@ -22,6 +22,7 @@ export function jointPd(
   previous: Go2JointState | null,
   ranges: readonly ActuatorRange[],
   dt: number,
+  gainScale = 1,
 ): PdCommand {
   const torques: number[] = [];
   let saturated = false;
@@ -33,8 +34,9 @@ export function jointPd(
       const desired = component(target, id, axis);
       const prior = previous ? component(previous, id, axis) : desired;
       const targetSpeed = dt > 0 ? (desired - prior) / dt : 0;
-      const kp = PD_KP[index] ?? 0;
-      const kd = PD_KD[index] ?? 0;
+      const scale = Number.isFinite(gainScale) ? gainScale : 1;
+      const kp = (PD_KP[index] ?? 0) * scale;
+      const kd = (PD_KD[index] ?? 0) * scale;
       const raw = kp * (desired - measured) + kd * (targetSpeed - speed);
       const range = ranges[index];
       const min = range?.minNm ?? -23.7;

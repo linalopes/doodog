@@ -39,6 +39,13 @@ export interface FootState {
   onFloor: boolean;
   /** Mean position of this foot's floor contacts. Null when it is not on the floor. */
   contact: [number, number, number] | null;
+  /**
+   * Visual foot origin in the world. Calf pose plus the foot offset.
+   * Not the collision sphere.
+   */
+  frame: [number, number, number];
+  /** Calf orientation, which is the foot frame orientation. w, x, y, z. */
+  frameQuat: QuatWxyz;
 }
 
 export interface SupportState {

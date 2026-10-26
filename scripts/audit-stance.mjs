@@ -151,6 +151,8 @@ function fakeSample(height) {
     clearanceM: -0.012,
     onFloor: true,
     contact: [0, 0, 0],
+    frame: [0.19, 0.14, 0.02],
+    frameQuat: [1, 0, 0, 0],
   };
   const angles = [0, 0.9, -1.8];
   const joints = { FL: [...angles], FR: [...angles], RL: [...angles], RR: [...angles] };

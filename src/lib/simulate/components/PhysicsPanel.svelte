@@ -20,7 +20,8 @@
   import { activeSketch } from '../../sketches/store';
   import { gestureScale, otherChannel, trackStageSeconds } from '../physics/score';
   import { ASSUMED_CANVAS } from '../go2/defaults';
-  import { CONTROLLER_NOTE, DEFAULT_EXPERIMENT, DRAW_COMPLETION_NOTE, DRAW_NOTE, SCORE_COMPLETION_NOTE, SCORE_NOTE } from '../physics/settings';
+  import { APPROACH_NOTE, BRUSH_NOTE, CONTROLLER_NOTE, DEFAULT_EXPERIMENT, DRAW_COMPLETION_NOTE, DRAW_NOTE, SCORE_COMPLETION_NOTE, SCORE_NOTE } from '../physics/settings';
+  import { paperFrom, tipToPaper } from '../go2/brush';
   import { FLOOR_NOTE, TORQUE_NOTE } from '../physics/scene';
   import { PHYSICS_LABEL, type PhysicsSnapshot } from '../physics/types';
   import type { PhysicsMode } from '../physics/experiment';
@@ -32,6 +33,7 @@
     { id: 'three-leg', label: 'Three-Leg Stance' },
     { id: 'air-draw', label: 'Drawing in the Air' },
     { id: 'score', label: 'Creative Score Tracking' },
+    { id: 'brush-approach', label: 'Brush Approach — No Contact' },
   ];
   const STAGE: Record<string, string> = {
     idle: 'Idle',
@@ -41,6 +43,7 @@
     lift: 'Lift',
     draw: 'Draw',
     track: 'Track Creative Score',
+    approach: 'Approach',
     hold: 'Hold',
     return: 'Return',
     done: 'Finished',
@@ -60,7 +63,10 @@
   const experiment = $derived(run.experiment);
   const playing = $derived(experiment?.playback === 'playing');
   const controlled = $derived(run.mode !== 'motors-off');
-  const stance = $derived(run.mode === 'three-leg' || run.mode === 'air-draw' || run.mode === 'score');
+  const stance = $derived(
+    run.mode === 'three-leg' || run.mode === 'air-draw' || run.mode === 'score' || run.mode === 'brush-approach',
+  );
+  const approaching = $derived(run.mode === 'brush-approach');
   const drawing = $derived(run.mode === 'air-draw');
   const scoring = $derived(run.mode === 'score');
   const clock = $derived($timeline);
@@ -77,6 +83,13 @@
   });
 
   const degrees = (radians: number) => `${((radians * 180) / Math.PI).toFixed(1)}°`;
+
+  function tipRelation(tip: readonly [number, number, number] | null): string {
+    if (!tip) return '—';
+    const relation = tipToPaper([tip[0], tip[1], tip[2]], paperFrom(run.config));
+    const millimetres = (relation.signedM * 1000).toFixed(1);
+    return `${millimetres} mm · ${relation.side} · ${relation.inside ? 'inside the sheet' : 'outside the sheet'}. Not contact.`;
+  }
 
   function jointLine(sample: PhysicsSnapshot, leg: (typeof LEGS)[number]): string {
     return sample.joints[leg].map((angle) => degrees(angle)).join('  ');
@@ -113,7 +126,7 @@
   }
 
   function onSeconds(
-    key: 'shiftSeconds' | 'liftSeconds' | 'holdSeconds' | 'returnSeconds' | 'drawSeconds' | 'trackSeconds' | 'approachSeconds',
+    key: 'shiftSeconds' | 'liftSeconds' | 'holdSeconds' | 'returnSeconds' | 'drawSeconds' | 'trackSeconds' | 'approachSeconds' | 'brushMoveSeconds',
     event: Event,
   ): void {
     const seconds = Number((event.currentTarget as HTMLInputElement).value);
@@ -145,9 +158,9 @@
     <p class="physics__label">{PHYSICS_LABEL}</p>
   </header>
   <p class="muted">
-    Motors Off drops the Go2 under gravity. Posture Hold, Three-Leg Stance, Drawing in the Air, and Creative Score
-    Tracking send torque commands in simulation only. The circle and the creative path are not ink. Nothing is sent
-    to a physical robot.
+    Motors Off drops the Go2 under gravity. Posture Hold, Three-Leg Stance, Drawing in the Air, Creative Score
+    Tracking, and Brush Approach send torque commands in simulation only. The circle, the creative path, and the
+    brush tip are not ink and not contact. Nothing is sent to a physical robot.
   </p>
   <div class="physics__actions" role="group" aria-label="Controller">
     {#each MODES as mode (mode.id)}
@@ -220,6 +233,33 @@
         <span class="field__label">Return</span>
         <input type="number" min="0.5" max="8" step="0.1" value={run.config.returnSeconds} onchange={(event) => onSeconds('returnSeconds', event)} />
       </label>
+      {#if approaching}
+        <label class="field">
+          <span class="field__label">Clearance</span>
+          <input
+            type="number"
+            min="5"
+            max="40"
+            step="1"
+            value={Math.round((run.config.brushClearanceM || DEFAULT_EXPERIMENT.brushClearanceM) * 1000)}
+            onchange={(event) => {
+              const mm = Number((event.currentTarget as HTMLInputElement).value);
+              if (Number.isFinite(mm)) void configureExperiment({ ...run.config, brushClearanceM: mm / 1000 });
+            }}
+          />
+        </label>
+        <label class="field">
+          <span class="field__label">Approach</span>
+          <input
+            type="number"
+            min="1"
+            max="8"
+            step="0.1"
+            value={run.config.brushMoveSeconds}
+            onchange={(event) => onSeconds('brushMoveSeconds', event)}
+          />
+        </label>
+      {/if}
       {#if drawing}
         <label class="field">
           <span class="field__label">Circle radius</span>
@@ -294,6 +334,9 @@
       Tracking lasts {trackingSeconds === null ? '—' : trackingSeconds.toFixed(2)} s of physics time, including the approach.
       Configured mapping: {(configuredScale * 1000).toFixed(3)} mm per canvas unit, so the canvas is {(canvas.width * configuredScale * 1000).toFixed(1)} mm × {(canvas.height * configuredScale * 1000).toFixed(1)} mm.
     </p>
+  {:else if approaching}
+    <p class="help-text">{BRUSH_NOTE}</p>
+    <p class="help-text">{APPROACH_NOTE}</p>
   {:else if run.mode === 'three-leg'}
     <p class="help-text">{COMPLETION_NOTE}</p>
   {/if}
@@ -371,9 +414,25 @@
         {#if scoring}
           <li><span>Track</span> {flag(experiment.criteria.track)}</li>
         {/if}
+        {#if approaching}
+          <li><span>Approach</span> {flag(experiment.criteria.approach)}</li>
+        {/if}
         <li><span>Hold</span> {flag(experiment.criteria.hold)}</li>
         <li><span>Return</span> {flag(experiment.criteria.return)}</li>
       </ul>
+    {/if}
+    {#if approaching && experiment}
+      <dl class="physics__readout">
+        <div><dt>Brush tip target</dt><dd>{pointText(experiment.approach.tipTarget)}</dd></div>
+        <div><dt>Measured tip</dt><dd>{pointText(experiment.approach.measuredTip)}</dd></div>
+        <div><dt>Commanded tip</dt><dd>{pointText(experiment.approach.commandedTip)}</dd></div>
+        <div><dt>Geometric gap</dt><dd>{experiment.approach.geometricErrorM === null ? '—' : `${(experiment.approach.geometricErrorM * 1000).toFixed(1)} mm`}</dd></div>
+        <div><dt>Paper snapshot</dt><dd>{run.config.paperOriginX.toFixed(3)}, {run.config.paperOriginY.toFixed(3)}, {run.config.paperOriginZ.toFixed(3)} m · {(run.config.paperWidthM * 100).toFixed(0)} × {(run.config.paperHeightM * 100).toFixed(0)} cm</dd></div>
+        <div><dt>Tip to paper</dt><dd>{tipRelation(experiment.approach.measuredTip)}</dd></div>
+      </dl>
+      {#if experiment.approach.note}
+        <p class="muted">{experiment.approach.note}</p>
+      {/if}
     {/if}
     {#if drawing && experiment}
       <dl class="physics__readout">
