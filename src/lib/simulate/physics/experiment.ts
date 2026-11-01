@@ -55,6 +55,7 @@ import {
   type ExperimentConfig,
 } from './settings.ts';
 import { brushWorld, calibrationFrom, clearanceTarget, paperFrom, pathReachable, solveTipTarget, tipToPaper } from '../go2/brush.ts';
+import { auditApproach, type ApproachPreflight } from './approachAudit.ts';
 import { analyticalFoot, forwardLeg } from '../go2/kinematics.ts';
 import { quatMul } from '../go2/math.ts';
 import { emptyEvalLog, noteEvaluation, summarizeEvaluation, type EvalLog, type EvaluationSummary } from './evaluation.ts';
@@ -139,6 +140,10 @@ export interface ApproachState {
   minClearanceM: number | null;
   maxAngleDeg: number | null;
   platformTouches: number;
+  /** Gate classification. Null before the approach check. Not a measured tip. */
+  preflight: ApproachPreflight | null;
+  /** True only after the approach stage has built a foot command. */
+  approachCommanded: boolean;
 }
 
 /** The creative trajectory, without the canvas samples, for the panel and the view. */
@@ -363,6 +368,8 @@ function emptyApproach(): ApproachState {
     minClearanceM: null,
     maxAngleDeg: null,
     platformTouches: 0,
+    preflight: null,
+    approachCommanded: false,
   };
 }
 
@@ -1023,6 +1030,15 @@ function beginApproach(memory: ExperimentMemory, sample: PhysicsSnapshot): void 
   memory.approach.liftFoot = liftFoot;
   memory.approach.tipTarget = [target[0], target[1], target[2]];
   memory.approach.footTarget = [solved.foot[0], solved.foot[1], solved.foot[2]];
+  memory.approach.preflight = auditApproach({
+    config: memory.config,
+    body,
+    orientation: planted.orientation,
+    liftFoot,
+    seed: sample.joints.FL,
+    supportReady: true,
+  });
+  memory.approach.approachCommanded = false;
   if (!solved.reachable || !path) {
     const gap = (solved.errorM * 1000).toFixed(1);
     fail(
@@ -1133,6 +1149,7 @@ function planTargets(
     const end = memory.approach.footTarget;
     const home = planted.feet.FL;
     if (approachMove) {
+      memory.approach.approachCommanded = true;
       const unit = smoothstep(progress(memory));
       feet.FL = [
         start[0] + (end[0] - start[0]) * unit,

@@ -20,7 +20,7 @@
  */
 
 import { DEFAULT_BRUSH_OFFSET } from './defaults.ts';
-import { analyticalFoot, forwardLeg } from './kinematics.ts';
+import { analyticalFoot, forwardLeg, REACH_TOLERANCE_M } from './kinematics.ts';
 import { quatMul, quatRotate, sub, yawPoint, type Quat, type Vec3 } from './math.ts';
 import { REFERENCE_ANGLES, type LegId } from './model.ts';
 import type { PaperConfig } from './mapping.ts';
@@ -45,6 +45,12 @@ export const DEFAULT_BRUSH_CALIBRATION: BrushCalibration = {
 
 /** Within this band the tip is reported as on the nominal plane. It is still not a contact. */
 export const PLANE_BAND_M = 0.0005;
+
+/** Orientation updates inside `solveTipTarget`. The approach gate uses this count. */
+export const TIP_SOLVE_PASSES = 5;
+
+/** Samples along a foot segment, including both ends, are `FOOT_PATH_STEPS + 1`. */
+export const FOOT_PATH_STEPS = 6;
 
 export interface BrushWorld {
   attachment: Vec3;
@@ -129,7 +135,7 @@ export function solveTipTarget(
   let joints: [number, number, number] = [seed[0], seed[1], seed[2]];
   let foot: Vec3 = [body[0], body[1], body[2]];
   let reachable = false;
-  for (let pass = 0; pass < 5; pass += 1) {
+  for (let pass = 0; pass < TIP_SOLVE_PASSES; pass += 1) {
     const pose = forwardLeg('FL', joints, [0, 0, 0]);
     const footQuat = quatMul(orientation, pose.footRotation);
     const localTip = brushTipInFoot(calibration);
@@ -146,7 +152,7 @@ export function solveTipTarget(
   const worldFoot = addVec(body, quatRotate(orientation, pose.foot));
   const tip = brushWorld(worldFoot, quatMul(orientation, pose.footRotation), calibration).tip;
   const errorM = Math.hypot(tip[0] - targetTip[0], tip[1] - targetTip[1], tip[2] - targetTip[2]);
-  return { joints, foot: worldFoot, tip, errorM, reachable: reachable && errorM <= 0.005 };
+  return { joints, foot: worldFoot, tip, errorM, reachable: reachable && errorM <= REACH_TOLERANCE_M };
 }
 
 /** True when every foot position on the segment has an inverse-kinematics solution. */
@@ -155,7 +161,7 @@ export function pathReachable(
   orientation: Quat,
   from: Vec3,
   to: Vec3,
-  steps = 6,
+  steps = FOOT_PATH_STEPS,
 ): boolean {
   for (let index = 0; index <= steps; index += 1) {
     const u = index / steps;

@@ -10,6 +10,7 @@
     type ExecutionIdentity,
   } from '../physics/evaluation.ts';
   import { configureExperiment, physicsRun } from '../physics/run.ts';
+  import ApproachReport from './ApproachReport.svelte';
   import { timeline } from '../../motion/timeline.ts';
 
   const WIDTH = 280;
@@ -189,8 +190,18 @@
 <section class="eval" aria-label="Controller evaluation">
   <header class="eval__head">
     <h2>Controller evaluation</h2>
-    <p>Foot frame only. A lower error is not an improvement by itself.</p>
+    <p>Foot frame only. A lower error is not an improvement by itself. The approach tip residual is a separate geometric check.</p>
   </header>
+  {#if experiment?.mode === 'brush-approach' || experiment?.mode === 'aerial-gesture'}
+    <ApproachReport
+      preflight={experiment.approach.preflight}
+      approachCommanded={experiment.approach.approachCommanded}
+      tipSamples={experiment.approach.tipSamples}
+      elapsed={experiment.elapsed}
+      stage={experiment.stage}
+      peaks={experiment.peaks}
+    />
+  {/if}
 
   <div class="eval__fields">
     <label>

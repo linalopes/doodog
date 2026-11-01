@@ -56,6 +56,12 @@ export interface PhysicsGuide {
   tipMeasured: Vec3 | null;
   /** Commanded brush tip in the world. Geometry, not contact. */
   tipDesired: Vec3 | null;
+  /** 5-pass predicted tip. Geometry, not a measured position. */
+  predictedTip?: Vec3 | null;
+  /** Foot frame of that prediction. Not the collision sphere. */
+  predictedFoot?: Vec3 | null;
+  /** First foot-path sample whose inverse kinematics failed. */
+  rejectedFoot?: Vec3 | null;
 }
 
 export interface Go2View {
@@ -272,12 +278,27 @@ export function createGo2View(
   );
   measuredTipDot.visible = false;
   desiredTipDot.visible = false;
+  const predictedTipDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.008, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xcad8d8 }),
+  );
+  const predictedFootDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.008, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x22113e }),
+  );
+  const rejectedFootDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.01, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xea7dff }),
+  );
+  predictedTipDot.visible = false;
+  predictedFootDot.visible = false;
+  rejectedFootDot.visible = false;
   const desiredTube = pathTube(0x22113e);
   const achievedTube = pathTube(0xea7dff);
   const downTubes = [pathTube(0x22113e), pathTube(0x22113e), pathTube(0x22113e), pathTube(0x22113e)];
   const upTubes = [pathTube(0x08f2db), pathTube(0x08f2db), pathTube(0x08f2db), pathTube(0x08f2db)];
   for (const tube of [...downTubes, ...upTubes]) scene.add(tube);
-  scene.add(comDot, targetDot, measuredTipDot, desiredTipDot, desiredTube, achievedTube);
+  scene.add(comDot, targetDot, measuredTipDot, desiredTipDot, predictedTipDot, predictedFootDot, rejectedFootDot, desiredTube, achievedTube);
 
   const legs: Partial<Record<LegId, LegNodes>> = {};
 
@@ -559,6 +580,9 @@ export function createGo2View(
     } else {
       desiredTipDot.visible = false;
     }
+    placeDot(predictedTipDot, guide?.predictedTip ?? null);
+    placeDot(predictedFootDot, guide?.predictedFoot ?? null);
+    placeDot(rejectedFootDot, guide?.rejectedFoot ?? null);
     setTube(desiredTube, guide?.desiredPath ?? []);
     setTube(achievedTube, guide?.achievedPath ?? []);
     downTubes.forEach((tube, index) => setTube(tube, guide?.brushDown?.[index] ?? []));
@@ -761,6 +785,15 @@ function pathTube(color: number): THREE.Mesh {
 }
 
 /** Display thickness only. The path coordinates stay on the foot frame. */
+function placeDot(mesh: THREE.Mesh, point: Vec3 | null): void {
+  if (!point) {
+    mesh.visible = false;
+    return;
+  }
+  mesh.visible = true;
+  mesh.position.set(point[0], point[1], point[2]);
+}
+
 function setTube(mesh: THREE.Mesh, points: readonly Vec3[]): void {
   mesh.geometry.dispose();
   if (points.length < 2) {

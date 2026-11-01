@@ -11,11 +11,13 @@
     resetPhysics,
     resumeExperiment,
     selectBoardThickness,
+    loadGroundReference,
     selectGroundCandidate,
     selectMountProfile,
     setPhysicsMode,
     startAerialGesture,
     startCandidateApproach,
+    startClearanceTrial,
     startExperiment,
     stepPhysicsOnce,
     stopExperiment,
@@ -27,6 +29,8 @@
   import { ASSUMED_CANVAS } from '../go2/defaults';
   import { APPROACH_NOTE, BRUSH_NOTE, CONTROLLER_NOTE, DEFAULT_EXPERIMENT, DRAW_COMPLETION_NOTE, DRAW_NOTE, SCORE_COMPLETION_NOTE, SCORE_NOTE } from '../physics/settings';
   import { paperFrom, tipToPaper } from '../go2/brush';
+  import { describeHomeFoot, PROGRESSIVE_CLEARANCE_M } from '../physics/approachAudit';
+  import ApproachReport from './ApproachReport.svelte';
   import { FLOOR_NOTE, TORQUE_NOTE } from '../physics/scene';
   import { workspaceLab } from '../go2/workspaceLab';
   import { PHYSICS_LABEL, type PhysicsSnapshot } from '../physics/types';
@@ -249,6 +253,9 @@
       >
         Load leading geometric candidate
       </button>
+      <button type="button" class="btn btn--small" onclick={() => void loadGroundReference()}>
+        Load 05I reference
+      </button>
       <button type="button" class="btn btn--small" disabled={!ready || playing || run.preparing} onclick={() => void startCandidateApproach()}>
         Start Approach
       </button>
@@ -261,6 +268,27 @@
         Start Aerial Gesture
       </button>
     </div>
+    <p class="help-text">
+      Progressive Brush Approach tries 30 mm, then 20 mm, then 10 mm as separate targets. Each button resets to the home keyframe before that one trial. A refusal does not start the next clearance.
+    </p>
+    <div class="physics__actions" role="group" aria-label="Progressive brush clearance">
+      {#each PROGRESSIVE_CLEARANCE_M as clearance (clearance)}
+        <button
+          type="button"
+          class="btn btn--small"
+          disabled={!ready || playing || run.preparing}
+          onclick={() => void startClearanceTrial(clearance)}
+        >
+          Approach {(clearance * 1000).toFixed(0)} mm
+        </button>
+      {/each}
+    </div>
+    {#if snapshot}
+      {@const home = describeHomeFoot(snapshot)}
+      {#if home.onHomeKeyframe}
+        <p class="help-text">{home.conclusion}</p>
+      {/if}
+    {/if}
   {/if}
   {#if candidate}
     <p class="muted">
@@ -455,6 +483,16 @@
     <p class="physics__error" role="alert">{experiment.failure}</p>
   {:else if run.notice}
     <p class="help-text">{run.notice}</p>
+  {/if}
+  {#if experiment?.approach.preflight}
+    <ApproachReport
+      preflight={experiment.approach.preflight}
+      approachCommanded={experiment.approach.approachCommanded}
+      tipSamples={experiment.approach.tipSamples}
+      elapsed={experiment.elapsed}
+      stage={experiment.stage}
+      peaks={experiment.peaks}
+    />
   {/if}
   {#if run.info}
     <p class="mono physics__meta">

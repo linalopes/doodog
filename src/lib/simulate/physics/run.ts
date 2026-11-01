@@ -20,6 +20,7 @@ import { planPhysicsAdvance, physicsRequestedTime } from './clock.ts';
 import { createPhysicsClient, type PhysicsClient } from './client.ts';
 import type { ExperimentView, PhysicsMode } from './experiment.ts';
 import { applyGroundCandidate, applyMountProfile, setBoardThickness } from './candidate.ts';
+import { groundReferenceConfig } from './approachAudit.ts';
 import { DEFAULT_EXPERIMENT, EXPERIMENT_STEPS_PER_FRAME, TIMELINE_HOLD_NOTE, type ExperimentConfig } from './settings.ts';
 import { writable } from 'svelte/store';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
@@ -281,6 +282,25 @@ export async function selectMountProfile(profile: 'baseline' | 'candidate-a' | '
     physicsRun.update((state) => ({ ...state, approachReady: false }));
   }
   await configureExperiment(next);
+}
+
+export async function loadGroundReference(): Promise<void> {
+  const next = groundReferenceConfig(get(physicsRun).config);
+  physicsRun.update((state) => ({ ...state, approachReady: false }));
+  await configureExperiment(next);
+}
+
+/**
+ * One clearance, from the home keyframe. A failed trial does not start another.
+ * The caller resets before this run, so the next button is a separate trial.
+ */
+export async function startClearanceTrial(clearanceM: number): Promise<void> {
+  const run = get(physicsRun);
+  if (run.status !== 'ready' || run.preparing || run.experiment?.playback === 'playing') return;
+  await configureExperiment({ ...run.config, brushClearanceM: clearanceM });
+  await resetPhysics();
+  await setPhysicsMode('brush-approach');
+  await startExperiment();
 }
 
 export async function startCandidateApproach(): Promise<void> {

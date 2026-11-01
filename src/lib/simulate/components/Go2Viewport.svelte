@@ -21,6 +21,7 @@
   let unreachableSamples = $state(0);
   let trailsHidden = false;
   let showCollision = $state(false);
+  let showPrediction = $state(true);
 
   const cache: { key: string; fingerprints: string[]; marks: TrailMark[] } = {
     key: '',
@@ -182,6 +183,11 @@
         brushUp: scoring ? (experiment?.score.desiredTravel ?? []) : [],
         tipMeasured: measuredTip,
         tipDesired: experiment?.approach.commandedTip ?? experiment?.approach.tipTarget ?? null,
+        predictedTip: showPrediction ? (experiment?.approach.preflight?.predictedTip ?? null) : null,
+        predictedFoot: showPrediction ? (experiment?.approach.preflight?.predictedFoot ?? null) : null,
+        rejectedFoot: showPrediction
+          ? (experiment?.approach.preflight?.path.find((sample) => sample.ik === 'failed')?.foot ?? null)
+          : null,
       });
       if (!trailsHidden) {
         view.setMarks([]);
@@ -405,6 +411,10 @@
       <input type="checkbox" bind:checked={showCollision} />
       Show foot collision spheres
     </label>
+    <label class="viewport__note">
+      <input type="checkbox" bind:checked={showPrediction} />
+      Show the predicted tip, the predicted foot, and the first rejected path sample
+    </label>
   <div class="viewport__details-body">
     {#if physicsLive}
       <p class="viewport__banner">Brush Geometry Preview — No Contact Physics</p>
@@ -420,7 +430,7 @@
             The purple line is the creative brush-down path, the turquoise line is brush-up travel, and the pink line is the measured foot. None of these lines is ink. The other creative brush is ignored. The physical drawing leg is FL.
           {/if}
           {#if experiment.mode === 'brush-approach' || experiment.mode === 'aerial-gesture'}
-            The turquoise marker is the commanded brush tip and the pink marker is the measured tip. A tip below the sheet is a signed distance, not contact.
+            The turquoise marker is the commanded brush tip and the pink marker is the measured tip. The pale marker is the 5-pass predicted tip and the dark marker is its foot frame. A tip below the sheet is a signed distance, not contact.
             {#if experiment.config.mountProfile === 'candidate-a'}
               The gray block is the elevated collision platform. Its top is the paper. The brush shaft does not collide.
             {/if}
