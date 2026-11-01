@@ -208,6 +208,18 @@
   const physicsLive = $derived(physicsSelected && $physicsRun.snapshot !== null);
   const experiment = $derived(physicsLive ? $physicsRun.experiment : null);
   const controlled = $derived(experiment !== null && experiment.mode !== 'motors-off');
+  const compactWarning = $derived.by(() => {
+    if (physicsLive && !controlled) return 'Zero torque. The robot may fall.';
+    if (!pose || physicsLive) return null;
+    const legs = [pose.legs.FL, pose.legs.FR];
+    if (legs.some((leg) => leg.reachable === false)) return 'A front leg missed its position.';
+    if (legs.some((leg) => leg.active && leg.posture?.drawing === 'invalid')) return 'Drawing posture invalid.';
+    if (legs.some((leg) => leg.active && leg.posture?.contralateral === 'invalid')) return 'A front leg crosses the midline.';
+    if (unreachableSamples > 0) {
+      return `${unreachableSamples} unreachable ${unreachableSamples === 1 ? 'sample' : 'samples'} on this trail.`;
+    }
+    return null;
+  });
 
   const STAGE_LABEL: Record<string, string> = {
     idle: 'Idle',
@@ -225,99 +237,25 @@
   };
 </script>
 
+<div class="viewport-stack">
 <div class="viewport">
   <div class="viewport__stage" bind:this={host} data-role="simulation-viewport"></div>
 
   <div class="viewport__overlay">
     <p class="viewport__banner">{physicsLive ? PHYSICS_LABEL : PREVIEW_LABEL}</p>
-    {#if physicsLive}
-      <p class="viewport__banner">Brush Geometry Preview — No Contact Physics</p>
-    {/if}
-    {#if physicsLive && $physicsRun.snapshot}
-      <p class="viewport__note">
-        {#if controlled && experiment}
-          {STAGE_LABEL[experiment.stage] ?? experiment.stage}. Torque PD. Contacts and the centre of mass are measured. The dark marker is the requested front-left target.
-          {#if experiment.mode === 'air-draw'}
-            The dark line is the requested circle and the pink line is the measured foot. Neither line is ink.
-          {/if}
-          {#if experiment.mode === 'score'}
-            The purple line is the creative brush-down path, the turquoise line is brush-up travel, and the pink line is the measured foot. None of these lines is ink. The other creative brush is ignored. The physical drawing leg is FL.
-          {/if}
-          {#if experiment.mode === 'brush-approach' || experiment.mode === 'aerial-gesture'}
-            The turquoise marker is the commanded brush tip and the pink marker is the measured tip. A tip below the sheet is a signed distance, not contact.
-            {#if experiment.config.mountProfile === 'candidate-a'}
-              The gray block is the elevated collision platform. Its top is the paper. The brush shaft does not collide.
-            {/if}
-          {/if}
-          This is not a safe path, and geometric paint is hidden.
-        {:else}
-          Zero torque. The robot may fall. Contacts are from MuJoCo. This is not a safe path, and geometric paint is hidden.
-        {/if}
-      </p>
+    {#if physicsLive && $physicsRun.snapshot && experiment}
       <p class="mono viewport__reach">
-        base z {$physicsRun.snapshot.basePosition[2].toFixed(3)} m · roll {(($physicsRun.snapshot.rollRad * 180) / Math.PI).toFixed(1)}° · pitch {(($physicsRun.snapshot.pitchRad * 180) / Math.PI).toFixed(1)}° · FL clearance {($physicsRun.snapshot.feet.FL.clearanceM * 1000).toFixed(0)} mm · platform contacts {$physicsRun.snapshot.platformContactCount ?? 0} · t {$physicsRun.snapshot.time.toFixed(2)} s
+        {STAGE_LABEL[experiment.stage] ?? experiment.stage} · t {$physicsRun.snapshot.time.toFixed(2)} s
       </p>
-    {:else}
-      <p class="viewport__note">
-        Geometric preview of paint. A position the leg can reach is not a drawing posture, and it is not a physics result.
-      </p>
-      {#if $workspaceLab.preview}
-        <p class="viewport__note">
-          Brush-mount preview. The sheet and shaft follow the draft. The score trail still uses the baseline paper and mount. Mesh collision is not evaluated.
-        </p>
-      {/if}
-    {/if}
-    {#if pose && !physicsLive}
-      {@const fl = pose.legs.FL}
+    {:else if pose}
       <p class="mono viewport__reach">
-        FL {fl.reachable === null ? 'held' : fl.reachable ? 'Position reached' : 'Position missed'}
-        {#if fl.positionErrorM !== null}
-          · {(fl.positionErrorM * 1000).toFixed(0)} mm
-        {/if}
-        {#if fl.reachable === true && fl.posture.drawing === 'invalid'}
-          · Drawing posture invalid
-        {:else if fl.reachable === true}
-          · No confirmed posture violation
-        {/if}
-        <span class="viewport__dot">·</span>
-        FR {pose.legs.FR.reachable === null ? 'held' : pose.legs.FR.reachable ? 'Position reached' : 'Position missed'}
-        {#if pose.legs.FR.positionErrorM !== null}
-          · {(pose.legs.FR.positionErrorM * 1000).toFixed(0)} mm
-        {/if}
-      </p>
-      <p class="mono viewport__reach">
-        {channelLine('FL', fl)}
+        {channelLine('FL', pose.legs.FL)}
         <span class="viewport__dot">·</span>
         {channelLine('FR', pose.legs.FR)}
       </p>
-      {#if fl.posture}
-        <p class="mono viewport__reach">
-          Brush axis {((fl.posture.brushAngleRad * 180) / Math.PI).toFixed(0)}° from the paper normal
-          · tolerance {((fl.posture.toleranceRad * 180) / Math.PI).toFixed(0)}°
-          · Joints {fl.posture.joints === 'valid' ? (fl.posture.nearLimit ? 'near a limit' : 'clear') : 'on a limit'}
-          · Floor {(fl.posture.linkClearanceM * 1000).toFixed(0)} mm
-          · {fl.posture.contralateral === 'invalid' ? 'Crosses the midline' : 'Stays on its side'}
-          · Torso primitives {fl.posture.torso}
-          · Mesh collision not evaluated
-          {#if pose.canvasAssumed}
-            · canvas 600×600 assumed
-          {/if}
-          {#if pose.manual}
-            · manual
-          {/if}
-          {#if fl.alternateFound}
-            · posture-aware pose
-          {:else if $simSettings.postureAware}
-            · no alternate pose within 5 mm
-          {/if}
-        </p>
-      {/if}
-      {#if unreachableSamples > 0}
-        <p class="viewport__note">
-          {unreachableSamples} unreachable
-          {unreachableSamples === 1 ? 'sample' : 'samples'} on this trail. The drawing was not rescaled.
-        </p>
-      {/if}
+    {/if}
+    {#if compactWarning}
+      <p class="viewport__note">{compactWarning}</p>
     {/if}
   </div>
 
@@ -421,11 +359,116 @@
   {/if}
 </div>
 
+<details class="viewport__details">
+  <summary>Pose measurements</summary>
+  <div class="viewport__details-body">
+    {#if physicsLive}
+      <p class="viewport__banner">Brush Geometry Preview — No Contact Physics</p>
+    {/if}
+    {#if physicsLive && $physicsRun.snapshot}
+      <p class="viewport__note">
+        {#if controlled && experiment}
+          {STAGE_LABEL[experiment.stage] ?? experiment.stage}. Torque PD. Contacts and the centre of mass are measured. The dark marker is the requested front-left target.
+          {#if experiment.mode === 'air-draw'}
+            The dark line is the requested circle and the pink line is the measured foot. Neither line is ink.
+          {/if}
+          {#if experiment.mode === 'score'}
+            The purple line is the creative brush-down path, the turquoise line is brush-up travel, and the pink line is the measured foot. None of these lines is ink. The other creative brush is ignored. The physical drawing leg is FL.
+          {/if}
+          {#if experiment.mode === 'brush-approach' || experiment.mode === 'aerial-gesture'}
+            The turquoise marker is the commanded brush tip and the pink marker is the measured tip. A tip below the sheet is a signed distance, not contact.
+            {#if experiment.config.mountProfile === 'candidate-a'}
+              The gray block is the elevated collision platform. Its top is the paper. The brush shaft does not collide.
+            {/if}
+          {/if}
+          This is not a safe path, and geometric paint is hidden.
+        {:else}
+          Zero torque. The robot may fall. Contacts are from MuJoCo. This is not a safe path, and geometric paint is hidden.
+        {/if}
+      </p>
+      <p class="mono viewport__reach">
+        base z {$physicsRun.snapshot.basePosition[2].toFixed(3)} m · roll {(($physicsRun.snapshot.rollRad * 180) / Math.PI).toFixed(1)}° · pitch {(($physicsRun.snapshot.pitchRad * 180) / Math.PI).toFixed(1)}° · FL clearance {($physicsRun.snapshot.feet.FL.clearanceM * 1000).toFixed(0)} mm · platform contacts {$physicsRun.snapshot.platformContactCount ?? 0} · t {$physicsRun.snapshot.time.toFixed(2)} s
+      </p>
+    {:else}
+      <p class="viewport__note">
+        Geometric preview of paint. A position the leg can reach is not a drawing posture, and it is not a physics result.
+      </p>
+      {#if $workspaceLab.preview}
+        <p class="viewport__note">
+          Brush-mount preview. The sheet and shaft follow the draft. The score trail still uses the baseline paper and mount. Mesh collision is not evaluated.
+        </p>
+      {/if}
+    {/if}
+    {#if pose && !physicsLive}
+      {@const fl = pose.legs.FL}
+      <p class="mono viewport__reach">
+        FL {fl.reachable === null ? 'held' : fl.reachable ? 'Position reached' : 'Position missed'}
+        {#if fl.positionErrorM !== null}
+          · {(fl.positionErrorM * 1000).toFixed(0)} mm
+        {/if}
+        {#if fl.reachable === true && fl.posture.drawing === 'invalid'}
+          · Drawing posture invalid
+        {:else if fl.reachable === true}
+          · No confirmed posture violation
+        {/if}
+        <span class="viewport__dot">·</span>
+        FR {pose.legs.FR.reachable === null ? 'held' : pose.legs.FR.reachable ? 'Position reached' : 'Position missed'}
+        {#if pose.legs.FR.positionErrorM !== null}
+          · {(pose.legs.FR.positionErrorM * 1000).toFixed(0)} mm
+        {/if}
+      </p>
+      <p class="mono viewport__reach">
+        {channelLine('FL', fl)}
+        <span class="viewport__dot">·</span>
+        {channelLine('FR', pose.legs.FR)}
+      </p>
+      {#if fl.posture}
+        <p class="mono viewport__reach">
+          Brush axis {((fl.posture.brushAngleRad * 180) / Math.PI).toFixed(0)}° from the paper normal
+          · tolerance {((fl.posture.toleranceRad * 180) / Math.PI).toFixed(0)}°
+          · Joints {fl.posture.joints === 'valid' ? (fl.posture.nearLimit ? 'near a limit' : 'clear') : 'on a limit'}
+          · Floor {(fl.posture.linkClearanceM * 1000).toFixed(0)} mm
+          · {fl.posture.contralateral === 'invalid' ? 'Crosses the midline' : 'Stays on its side'}
+          · Torso primitives {fl.posture.torso}
+          · Mesh collision not evaluated
+          {#if pose.canvasAssumed}
+            · canvas 600×600 assumed
+          {/if}
+          {#if pose.manual}
+            · manual
+          {/if}
+          {#if fl.alternateFound}
+            · posture-aware pose
+          {:else if $simSettings.postureAware}
+            · no alternate pose within 5 mm
+          {/if}
+        </p>
+      {/if}
+      {#if unreachableSamples > 0}
+        <p class="viewport__note">
+          {unreachableSamples} unreachable
+          {unreachableSamples === 1 ? 'sample' : 'samples'} on this trail. The drawing was not rescaled.
+        </p>
+      {/if}
+    {/if}
+  </div>
+</details>
+</div>
+
 <style>
+  .viewport-stack {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
   .viewport {
     position: relative;
-    flex: 1 1 auto;
-    min-height: 420px;
+    flex: 1 0 auto;
+    height: clamp(420px, 64vh, 720px);
+    min-height: clamp(420px, 64vh, 720px);
     border: var(--border-strong);
     border-radius: var(--radius);
     overflow: hidden;
@@ -581,5 +624,45 @@
 
   .viewport__status--error {
     color: var(--color-danger);
+  }
+
+  .viewport__details {
+    flex: none;
+    border: var(--border);
+    border-radius: var(--radius);
+    background: var(--brand-white);
+  }
+
+  .viewport__details summary {
+    cursor: pointer;
+    padding: var(--space-2) var(--space-3);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--brand-deep-purple);
+  }
+
+  .viewport__details-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: 0 var(--space-3) var(--space-3);
+  }
+
+  .viewport__details .viewport__banner,
+  .viewport__details .viewport__note,
+  .viewport__details .viewport__reach {
+    width: auto;
+    max-width: none;
+    background: transparent;
+    padding: 0;
+  }
+
+  @media (max-width: 720px) {
+    .viewport {
+      height: clamp(360px, 58vh, 520px);
+      min-height: 360px;
+    }
   }
 </style>

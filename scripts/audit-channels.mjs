@@ -10,6 +10,7 @@ import { referenceAngles } from '../src/lib/simulate/go2/kinematics.ts';
 import { LEGS } from '../src/lib/simulate/go2/model.ts';
 import { interpretFrame, solvePose } from '../src/lib/simulate/go2/pose.ts';
 import { getExampleById } from '../src/lib/sketches/examples.ts';
+import { isUnchangedOlderExample } from '../src/lib/sketches/legacyExample.ts';
 
 const CANVAS = { width: 600, height: 600 };
 const home = referenceAngles();
@@ -168,3 +169,16 @@ assert.equal(coupled.legs.FR.active, true);
 assert.equal(sameJoints(coupled.legs.FL.joints, home), false);
 assert.equal(sameJoints(coupled.legs.FR.joints, home), false);
 assert.equal(coupled.label.includes('Not Physically Validated'), true);
+
+const gridExample = getExampleById('grid');
+assert.ok(gridExample);
+const olderGrid = gridExample.source.replace(', active: false', '');
+assert.equal(isUnchangedOlderExample({ exampleId: 'grid', source: olderGrid }), true);
+const commented = olderGrid.replace('function restingBrush()', '// The other brush stays lifted.\nfunction restingBrush()');
+assert.notEqual(commented, olderGrid);
+assert.equal(isUnchangedOlderExample({ exampleId: 'grid', source: commented }), true);
+assert.equal(isUnchangedOlderExample({ exampleId: 'grid', source: gridExample.source }), false);
+assert.equal(isUnchangedOlderExample({ exampleId: 'grid', source: olderGrid.replace('const resting = restingBrush()', 'const resting = { x: 1, y: 1, contact: false }') }), false);
+assert.equal(isUnchangedOlderExample({ exampleId: null, source: olderGrid }), false);
+assert.equal(isUnchangedOlderExample({ exampleId: 'two-brush-lissajous', source: olderGrid }), false);
+assert.deepEqual(home, [0, 0.9, -1.8]);

@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { get } from 'svelte/store';
   import ConfirmDialog from '../lib/components/ConfirmDialog.svelte';
+  import LegacySketchNotice from '../lib/components/LegacySketchNotice.svelte';
   import MainSection from '../lib/components/MainSection.svelte';
   import CodeEditor from '../lib/create/components/CodeEditor.svelte';
   import ExampleGallery from '../lib/create/components/ExampleGallery.svelte';
@@ -22,6 +23,7 @@
     type RuntimeLogEntry,
     type SketchRunner,
   } from '../lib/p5/runner';
+  import { bindExampleRestore } from '../lib/sketches/exampleRestore';
   import { hashSource } from '../lib/sketches/sourceHash';
   import {
     activeSketch,
@@ -148,6 +150,12 @@
     const time = $timeline.time;
     if (!isLive || !runner) return;
     runner.requestTime(time);
+  });
+
+  $effect(() => {
+    return bindExampleRestore((id) => {
+      void applyUpdatedExample(id);
+    });
   });
 
   /** Selection transaction: flush edits → stop run → replace editor → reset preview. */
@@ -281,6 +289,23 @@
       if (restored) applySketchSelection(restored.id, restored.source, restored.name);
     }
     restoreConfirmOpen = false;
+  }
+
+  /** Confirmed from the older-example notice. Replaces that copy and runs it. */
+  async function applyUpdatedExample(id: string) {
+    if (get(activeSketch)?.id !== id) return;
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    pendingSave = null;
+    stopRun('Restore example.');
+    if (!restoreOriginalExample(id)) return;
+    const restored = get(sketches).find((entry) => entry.id === id);
+    if (!restored) return;
+    applySketchSelection(restored.id, restored.source, restored.name);
+    await tick();
+    await runSketch();
   }
 
   function commitRename() {
@@ -469,6 +494,7 @@
         <Timeline lanes={false} />
       </div>
       <MotionReadout />
+      <LegacySketchNotice />
 
       <ParametersPanel />
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LegacySketchNotice from '../../components/LegacySketchNotice.svelte';
   import MotionReadout from '../../components/MotionReadout.svelte';
   import Go2Viewport from './Go2Viewport.svelte';
 
@@ -14,6 +15,7 @@
     <p class="section-label">Shared motion</p>
     <MotionReadout />
   </div>
+  <LegacySketchNotice />
   <Go2Viewport />
 </div>
 
