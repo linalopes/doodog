@@ -10,6 +10,7 @@ import { get, writable } from 'svelte/store';
 import type { BrushCalibration } from './brush.ts';
 import { followTimeline, kinematicPose, previewFrontLeft } from './settings.ts';
 import type { Vec3 } from './math.ts';
+import { coarseGroundQueries, refineGroundQueries, solveGroundQuery, rankGroundCandidates } from './ground.ts';
 import {
   SEARCH_COLUMNS,
   WORKSPACE_TOLERANCE_DEG,
@@ -41,6 +42,7 @@ export interface WorkspaceLabState {
   searchPlanned: number;
   searchCancelled: boolean;
   searchResults: WorkspaceCandidate[];
+  searchKind: 'historical' | 'ground';
   scores: ScoreEvaluation[];
   notice: string;
 }
@@ -58,6 +60,7 @@ export const workspaceLab = writable<WorkspaceLabState>({
   searchPlanned: searchSpecs().length,
   searchCancelled: false,
   searchResults: [],
+  searchKind: 'historical',
   scores: [],
   notice: 'Baseline mount and sheet. The preview has not been changed.',
 });
@@ -121,6 +124,7 @@ export function applyCandidate(candidate: WorkspaceCandidate): void {
       yawRad: candidate.yawRad,
       toleranceDeg: WORKSPACE_TOLERANCE_DEG,
       columns: SEARCH_COLUMNS,
+      boardThicknessM: candidate.boardThicknessM,
     },
     preview: true,
     searchRunning: false,
@@ -146,6 +150,7 @@ export function restoreBaseline(): void {
     searchPlanned: searchSpecs().length,
     searchCancelled: false,
     searchResults: get(workspaceLab).searchResults,
+    searchKind: get(workspaceLab).searchKind,
     scores: [],
     notice: 'Baseline restored. The default mount and the sheet at (0.30, 0, 0) m are showing. MuJoCo was not changed.',
   });
@@ -198,6 +203,74 @@ export function scheduleSample(): void {
   setTimeout(step, 0);
 }
 
+export function startGroundSearch(): void {
+  const token = ++searchToken;
+  const coarse = coarseGroundQueries();
+  const found: WorkspaceCandidate[] = [];
+  workspaceLab.update((state) => ({
+    ...state,
+    searchRunning: true,
+    searchCancelled: false,
+    searchExamined: 0,
+    searchPlanned: coarse.length,
+    searchResults: [],
+    searchKind: 'ground',
+    notice: `Ground sheet search: ${coarse.length} coarse configurations, then a local refinement. Thickness 0, 3, 5 and 8 mm. Shaft 45, 80 and 100 mm. Pitch −90, −45 and 0°. Paper centres (300, 0), (240, 80) and (180, 140) mm. This is not a global optimum and not a hardware dimension.`,
+  }));
+  let index = 0;
+  let refined: WorkspaceQuery[] = [];
+  let refining = false;
+  const step = (): void => {
+    if (token !== searchToken) return;
+    if (!refining && index >= coarse.length) {
+      const best = rankGroundCandidates(found)[0];
+      refined = best ? refineGroundQueries(best) : [];
+      refining = true;
+      index = 0;
+      workspaceLab.update((state) => ({
+        ...state,
+        searchPlanned: coarse.length + refined.length,
+        searchExamined: found.length,
+        notice: `Coarse sample finished. Refining ${refined.length} configurations around the leading result.`,
+      }));
+    }
+    const query = refining ? refined[index] : coarse[index];
+    if (!query) {
+      finish(false);
+      return;
+    }
+    found.push(solveGroundQuery(query));
+    index += 1;
+    workspaceLab.update((state) => ({
+      ...state,
+      searchExamined: found.length,
+      searchPlanned: coarse.length + (refining ? refined.length : 0),
+      searchResults: rankGroundCandidates(found),
+    }));
+    if (token !== searchToken) {
+      finish(true);
+      return;
+    }
+    setTimeout(step, 0);
+  };
+  const finish = (cancelled: boolean): void => {
+    const ranked = rankGroundCandidates(found);
+    const promising = ranked.filter((item) => item.summary.largestRegion > 0).length;
+    workspaceLab.update((state) => ({
+      ...state,
+      searchRunning: false,
+      searchCancelled: cancelled,
+      searchExamined: found.length,
+      searchResults: ranked,
+      searchKind: 'ground',
+      notice: cancelled
+        ? `Ground search cancelled after ${found.length} configurations.`
+        : `Ground search finished ${found.length} configurations. ${promising} have a connected candidate region. Mesh collision was not evaluated. MuJoCo has not tested them.`,
+    }));
+  };
+  setTimeout(step, 0);
+}
+
 export function startCandidateSearch(): void {
   const token = ++searchToken;
   const planned = searchSpecs().length;
@@ -209,6 +282,7 @@ export function startCandidateSearch(): void {
     searchExamined: 0,
     searchPlanned: planned,
     searchResults: [],
+    searchKind: 'historical',
     notice: `Searching ${planned} documented configurations on a ${SEARCH_COLUMNS}×${SEARCH_COLUMNS} sheet sample. This is not a global optimum.`,
   }));
   let index = 0;

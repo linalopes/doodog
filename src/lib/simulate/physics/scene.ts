@@ -35,8 +35,9 @@ export interface PlatformGeom {
 }
 
 /**
- * Ground stays at z = 0. A platform is added only for Candidate A.
- * `go2.xml` is included and is not rewritten. The box top is the paper plane.
+ * Ground stays at z = 0. A box is added for Candidate A, or for a ground
+ * sheet whose board thickness is greater than zero. `go2.xml` is included
+ * and is not rewritten. The box top is the drawing plane.
  * The brush is not a geom in this file.
  */
 export function go2FloorSceneXml(platform: PlatformGeom | null = null): string {

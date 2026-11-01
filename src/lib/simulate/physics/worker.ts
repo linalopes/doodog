@@ -27,7 +27,7 @@ import type { ScoreBuffer } from './score.ts';
 import type { ExperimentConfig } from './settings.ts';
 import { createPhysicsSession, type PhysicsSession } from './session.ts';
 import { PHYSICS_ASSET_FILES } from './scene.ts';
-import { platformSpec } from './candidate.ts';
+import { collisionSpec } from './candidate.ts';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
 
 interface LoadMessage {
@@ -75,16 +75,19 @@ let loaded: { xml: string; assets: Record<string, Uint8Array> } | null = null;
 let platformKey = 'baseline';
 
 function platformKeyOf(config: ExperimentConfig): string {
-  if (config.mountProfile !== 'candidate-a') return 'baseline';
+  if (config.mountProfile === 'baseline') return 'baseline';
+  if (config.mountProfile === 'ground' && !(config.boardThicknessM > 1e-4)) return 'ground-sheet';
+  const thickness = config.mountProfile === 'ground' ? config.boardThicknessM : config.platformThicknessM;
   return [
+    config.mountProfile,
     config.paperOriginX,
     config.paperOriginY,
     config.paperOriginZ,
     config.paperWidthM,
     config.paperHeightM,
-    config.platformThicknessM,
+    thickness,
   ]
-    .map((value) => value.toFixed(6))
+    .map((value) => (typeof value === 'number' ? value.toFixed(6) : value))
     .join(',');
 }
 
@@ -136,7 +139,7 @@ async function handle(message: Request): Promise<Reply> {
       memory = createMemory(memory.config);
       memory.mode = mode;
       memory.reason =
-        'The MuJoCo model was recompiled so the collision platform matches this configuration. The pose was reset to the home keyframe. go2.xml was not edited. Platform collision is on. The brush tip is not a collision geom.';
+        'The MuJoCo model was recompiled so the collision geometry matches this configuration. The pose was reset to the home keyframe. go2.xml was not edited. The brush tip is not a collision geom.';
       return reply(message.id, snapshot);
     }
     return reply(message.id, session.sample());
@@ -206,7 +209,7 @@ function zeros(): number[] {
 async function rebuildPlatform(config: ExperimentConfig): Promise<boolean> {
   const nextKey = platformKeyOf(config);
   if (nextKey === platformKey || !loaded || !session) return false;
-  const spec = platformSpec(config);
+  const spec = collisionSpec(config);
   session.dispose();
   session = await createPhysicsSession({
     xml: loaded.xml,

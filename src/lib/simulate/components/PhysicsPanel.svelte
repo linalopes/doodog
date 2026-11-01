@@ -10,6 +10,8 @@
     physicsRun,
     resetPhysics,
     resumeExperiment,
+    selectBoardThickness,
+    selectGroundCandidate,
     selectMountProfile,
     setPhysicsMode,
     startAerialGesture,
@@ -26,6 +28,7 @@
   import { APPROACH_NOTE, BRUSH_NOTE, CONTROLLER_NOTE, DEFAULT_EXPERIMENT, DRAW_COMPLETION_NOTE, DRAW_NOTE, SCORE_COMPLETION_NOTE, SCORE_NOTE } from '../physics/settings';
   import { paperFrom, tipToPaper } from '../go2/brush';
   import { FLOOR_NOTE, TORQUE_NOTE } from '../physics/scene';
+  import { workspaceLab } from '../go2/workspaceLab';
   import { PHYSICS_LABEL, type PhysicsSnapshot } from '../physics/types';
   import type { PhysicsMode } from '../physics/experiment';
 
@@ -76,6 +79,12 @@
   );
   const approaching = $derived(run.mode === 'brush-approach' || run.mode === 'aerial-gesture');
   const candidate = $derived(run.config.mountProfile === 'candidate-a');
+  const ground = $derived(run.config.mountProfile === 'ground');
+  const groundLeader = $derived(
+    $workspaceLab.searchKind === 'ground'
+      ? ($workspaceLab.searchResults.find((item) => item.homeBoardClear !== false && item.summary.largestRegion > 0) ?? null)
+      : null,
+  );
   const drawing = $derived(run.mode === 'air-draw');
   const scoring = $derived(run.mode === 'score');
   const clock = $derived($timeline);
@@ -200,7 +209,59 @@
     >
       Candidate A — Elevated Sheet / 45° Brush
     </button>
+    <button
+      type="button"
+      class="btn btn--small"
+      aria-pressed={ground}
+      onclick={() => void selectMountProfile('ground')}
+    >
+      Ground Sheet / Low Clipboard
+    </button>
   </div>
+  {#if ground}
+    <p class="muted">
+      Paper stays 200 × 200 mm. The upper surface is the board thickness, from the floor at z = 0.
+      Zero thickness leaves the paper on the ground and adds no collision box. The default mount is unchanged until a geometric candidate is loaded.
+      Return is touch down first. Clearance {(run.config.brushClearanceM * 1000).toFixed(0)} mm. This is not a hardware safety result.
+    </p>
+    <div class="physics__actions" role="group" aria-label="Board thickness">
+      {#each [0, 3, 5, 8, 10] as millimetres (millimetres)}
+        <button
+          type="button"
+          class="btn btn--small"
+          aria-pressed={Math.abs(run.config.boardThicknessM * 1000 - millimetres) < 0.1}
+          onclick={() => void selectBoardThickness(millimetres / 1000)}
+        >
+          {millimetres} mm
+        </button>
+      {/each}
+    </div>
+    <p class="mono">
+      Upper surface z = {run.config.paperOriginZ.toFixed(3)} m · centre ({run.config.paperOriginX.toFixed(3)}, {run.config.paperOriginY.toFixed(3)}) m ·
+      shaft {(run.config.brushLengthM * 1000).toFixed(0)} mm · pitch {((run.config.brushPitchRad * 180) / Math.PI).toFixed(0)}°
+    </p>
+    <div class="physics__actions">
+      <button
+        type="button"
+        class="btn btn--small"
+        disabled={!groundLeader}
+        onclick={() => groundLeader && void selectGroundCandidate(groundLeader)}
+      >
+        Load leading geometric candidate
+      </button>
+      <button type="button" class="btn btn--small" disabled={!ready || playing || run.preparing} onclick={() => void startCandidateApproach()}>
+        Start Approach
+      </button>
+      <button
+        type="button"
+        class="btn btn--small"
+        disabled={!ready || playing || run.preparing || !run.approachReady}
+        onclick={() => void startAerialGesture()}
+      >
+        Start Aerial Gesture
+      </button>
+    </div>
+  {/if}
   {#if candidate}
     <p class="muted">
       FL attachment (35, 0, 0) mm, shaft 45 mm, pitch +45°, roll 0°, yaw 0°. Paper 200 × 200 mm at (0.20, 0.08, 0.06) m, yaw 0°.

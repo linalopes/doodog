@@ -27,7 +27,7 @@ import { solveLeg } from './kinematics.ts';
 import { mapBrushTarget, type PaperConfig } from './mapping.ts';
 import { add, quatRotate, yawPoint, type Vec3 } from './math.ts';
 import { BODY_POSITION } from './model.ts';
-import { assessPosture, brushAngleToPaper, type CheckStatus } from './posture.ts';
+import { assessPosture, boardPrimitiveStatus, brushAngleToPaper, type CheckStatus } from './posture.ts';
 
 export const WORKSPACE_SHEET_M = 0.2;
 export const WORKSPACE_TOLERANCE_DEG = 25;
@@ -50,6 +50,11 @@ export interface WorkspaceQuery {
   yawRad: number;
   toleranceDeg: number;
   columns: number;
+  /**
+   * Upper surface height of a floor-level board, metres.
+   * Zero or omitted means no collision board. The paper centre Z is the drawing surface.
+   */
+  boardThicknessM?: number;
 }
 
 export interface WorkspaceCell {
@@ -72,6 +77,8 @@ export interface WorkspaceCell {
   contralateral: CheckStatus | null;
   torso: CheckStatus | null;
   brush: CheckStatus | null;
+  /** Foot sphere and calf cylinders against a board. Omitted when there is no board. */
+  board: CheckStatus | null;
   mesh: 'not-evaluated';
   reason: string;
 }
@@ -108,6 +115,10 @@ export interface WorkspaceCandidate {
   calibration: BrushCalibration;
   origin: Vec3;
   yawRad: number;
+  /** Present for a ground-sheet sample. The paper centre Z is this upper surface. */
+  boardThicknessM?: number;
+  /** False when a home-keyframe foot sphere meets the board. */
+  homeBoardClear?: boolean;
   summary: WorkspaceSummary;
 }
 
@@ -182,6 +193,7 @@ interface Checks {
   contralateral: CheckStatus;
   torso: CheckStatus;
   brush: CheckStatus;
+  board?: CheckStatus;
 }
 
 const PAPER_WIDTH = WORKSPACE_SHEET_M;
@@ -276,12 +288,21 @@ export function classifyPaperPoint(target: Vec3, query: WorkspaceQuery): Workspa
   const angle = brushAngleToPaper(shaft);
   const brush: CheckStatus =
     query.calibration.lengthM <= 0 ? 'not-evaluated' : angle <= (query.toleranceDeg * Math.PI) / 180 + 1e-6 ? 'valid' : 'invalid';
+  const thickness = query.boardThicknessM ?? 0;
+  const board =
+    thickness > 1e-4
+      ? boardPrimitiveStatus('FL', solved.joints, {
+          center: [query.origin[0], query.origin[1], thickness / 2],
+          half: [PAPER_WIDTH / 2, PAPER_HEIGHT / 2, thickness / 2],
+        })
+      : undefined;
   const checks: Checks = {
     joints: posture.joints,
     floor: posture.floor,
     contralateral: posture.contralateral,
     torso: posture.torso,
     brush,
+    board,
   };
   const kind = kindOf(solved.reachable, checks);
   const achieved = add(solved.tip, BODY_POSITION);
@@ -304,6 +325,7 @@ export function classifyPaperPoint(target: Vec3, query: WorkspaceQuery): Workspa
     contralateral: posture.contralateral,
     torso: posture.torso,
     brush,
+    board: board ?? null,
     mesh: 'not-evaluated',
     reason: reasonFor(solved.reachable, solved.positionErrorM, checks, (angle * 180) / Math.PI),
   };
@@ -567,6 +589,7 @@ export function sameCalibration(a: BrushCalibration, b: BrushCalibration): boole
 function kindOf(positionReached: boolean, checks: Checks): CellKind {
   if (!positionReached) return 'unreachable';
   const values = [checks.joints, checks.floor, checks.contralateral, checks.torso, checks.brush];
+  if (checks.board) values.push(checks.board);
   if (values.some((status) => status === 'invalid')) return 'posture-invalid';
   if (values.some((status) => status === 'not-evaluated')) return 'indeterminate';
   return 'candidate';
@@ -580,11 +603,14 @@ function reasonFor(positionReached: boolean, errorM: number, checks: Checks, ang
   if (checks.contralateral === 'invalid') failed.push('foot crosses the midline');
   if (checks.torso === 'invalid') failed.push('torso primitive intersection');
   if (checks.brush === 'invalid') failed.push(`shaft ${angleDeg.toFixed(0)}° from the inward paper normal`);
+  if (checks.board === 'invalid') failed.push('foot sphere or calf cylinder intersects the board');
   if (checks.brush === 'not-evaluated') return 'Shaft direction was not evaluated. Mesh collision was not evaluated.';
   if (failed.length > 0) {
     return `Position reached. Rejected: ${failed.join('; ')}. Mesh collision was not evaluated.`;
   }
-  return 'Candidate. The implemented geometric checks passed. Mesh collision was not evaluated. This is not a validated drawing pose and it was not tested in MuJoCo.';
+  const boardNote =
+    checks.board === 'valid' ? ' Foot sphere and calf cylinders clear the board.' : '';
+  return `Candidate. The implemented geometric checks passed.${boardNote} Mesh collision was not evaluated. This is not a validated drawing pose and it was not tested in MuJoCo.`;
 }
 
 function largestCandidateRegion(cells: readonly WorkspaceCell[], columns: number, rows: number): number {

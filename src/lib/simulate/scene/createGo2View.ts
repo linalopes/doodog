@@ -85,6 +85,8 @@ export interface Go2View {
       heightM: number;
     } | null,
   ): void;
+  /** Foot collision spheres. Null hides them. These are the MJCF radii, not meshes. */
+  setFootSpheres(points: readonly Vec3[] | null): void;
   /** Paper-grid marks for the mount lab. Null hides them. The turquoise dot is the selection. */
   setWorkspace(
     marks: readonly { position: Vec3; kind: 'unreachable' | 'posture-invalid' | 'candidate' | 'indeterminate' }[] | null,
@@ -208,6 +210,15 @@ export function createGo2View(
   );
   platform.visible = false;
   scene.add(platform);
+  const footSpheres = [0, 1, 2, 3].map(() => {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.022, 16, 10),
+      new THREE.MeshBasicMaterial({ color: 0xea7dff, wireframe: true }),
+    );
+    mesh.visible = false;
+    scene.add(mesh);
+    return mesh;
+  });
 
   const lines = {
     desiredLeft: makeLine(0x22113e, true),
@@ -401,6 +412,15 @@ export function createGo2View(
     requestRender();
   }
 
+  function setFootSpheres(points: readonly Vec3[] | null): void {
+    footSpheres.forEach((mesh, index) => {
+      const point = points?.[index];
+      mesh.visible = Boolean(point);
+      if (point) mesh.position.set(point[0], point[1], point[2]);
+    });
+    requestRender();
+  }
+
   function setWorkspace(
     marks: readonly { position: Vec3; kind: 'unreachable' | 'posture-invalid' | 'candidate' | 'indeterminate' }[] | null,
     selection: { target: Vec3; sphere: Vec3 | null; clearanceM: number | null } | null,
@@ -587,6 +607,7 @@ export function createGo2View(
     setBrushCalibration,
     setSurface,
     setPlatform,
+    setFootSpheres,
     setWorkspace,
     setView,
     resize,

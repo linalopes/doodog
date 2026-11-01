@@ -14,12 +14,15 @@ import { quatRotate } from '../go2/math.ts';
 import { brushAngleToPaper } from '../go2/posture.ts';
 import {
   aerialTip,
+  boardSpec,
   footOnPlatform,
   isCandidate,
+  isGround,
   platformSpec,
   sphereHitsPlatform,
   supportFootBlocked,
   validateCandidatePose,
+  validateGroundPose,
 } from './candidate.ts';
 import { jointPd } from './pd.ts';
 import {
@@ -639,8 +642,8 @@ export function begin(memory: ExperimentMemory, sample: PhysicsSnapshot): Experi
     next.failure = next.reason;
     return next;
   }
-  if (isCandidate(next.config)) {
-    const report = validateCandidatePose(sample, next.config);
+  if (isCandidate(next.config) || isGround(next.config)) {
+    const report = isGround(next.config) ? validateGroundPose(sample, next.config) : validateCandidatePose(sample, next.config);
     if (!report.ok) {
       next.playback = 'paused';
       next.stage = 'done';
@@ -749,9 +752,9 @@ export function commandFrom(
   }
 
   const plan = planTargets(next, sample);
-  if (isCandidate(next.config) && plan.flTarget && footEntersPlatform(plan.flTarget, next.config)) {
-    const note =
-      'The commanded front-left foot sphere would enter the elevated platform. The step was not applied. Platform collision stays on. The brush tip is not a contact geom.';
+  const blockedFoot = plan.flTarget ? footEntersPlatform(plan.flTarget, next.config) : null;
+  if ((isCandidate(next.config) || isGround(next.config)) && blockedFoot) {
+    const note = `${blockedFoot} The step was not applied. The brush tip is not a contact geom.`;
     next.playback = 'paused';
     next.stage = 'done';
     next.outcome = 'failed';
@@ -759,8 +762,8 @@ export function commandFrom(
     next.reason = note;
     return { memory: next, torques: zeros, integrate: false };
   }
-  const intrusion = platformTouch(sample);
-  if (isCandidate(next.config) && intrusion) {
+  const intrusion = isGround(next.config) ? boardTouch(sample) : platformTouch(sample);
+  if ((isCandidate(next.config) || isGround(next.config)) && intrusion) {
     next.playback = 'paused';
     next.stage = 'done';
     next.outcome = 'failed';
@@ -1643,9 +1646,9 @@ function footEntersPlatform(foot: Vec3, config: ExperimentConfig): boolean {
 }
 
 function footPathEntersPlatform(start: Vec3, end: Vec3, config: ExperimentConfig): string | null {
-  if (!isCandidate(config)) return null;
-  const spec = platformSpec(config);
+  const spec = isCandidate(config) ? platformSpec(config) : isGround(config) ? boardSpec(config) : null;
   if (!spec) return null;
+  const obstacle = isGround(config) ? 'low clipboard' : 'elevated platform';
   for (let step = 0; step <= 12; step += 1) {
     const t = step / 12;
     const point: Vec3 = [
@@ -1654,7 +1657,7 @@ function footPathEntersPlatform(start: Vec3, end: Vec3, config: ExperimentConfig
       start[2] + (end[2] - start[2]) * t,
     ];
     if (sphereHitsPlatform(point, FOOT_RADIUS_M, spec)) {
-      return `The front-left foot sphere would enter the elevated platform between (${fmtPoint(start)}) m and (${fmtPoint(end)}) m. The platform footprint was not cut away, and the foot was not commanded through it.`;
+      return `The front-left foot sphere would enter the ${obstacle} between (${fmtPoint(start)}) m and (${fmtPoint(end)}) m. The footprint was not cut away, and the foot was not commanded through it.`;
     }
   }
   return null;
@@ -1671,15 +1674,29 @@ function liftEntersPlatform(sample: PhysicsSnapshot, memory: ExperimentMemory): 
 }
 
 function returnEntersPlatform(memory: ExperimentMemory): string | null {
-  if (!isCandidate(memory.config) || !memory.planted) return null;
+  if ((!isCandidate(memory.config) && !isGround(memory.config)) || !memory.planted) return null;
   const home = memory.planted.feet.FL;
-  const spec = platformSpec(memory.config);
+  const spec = isGround(memory.config) ? boardSpec(memory.config) : platformSpec(memory.config);
+  if (isGround(memory.config) && spec && supportFootBlocked(home, spec)) {
+    return 'Return would lower the front-left foot through the low clipboard. The captured support point lies inside the board, and the board was not cut away. The descent was not commanded.';
+  }
   if (spec && supportFootBlocked(home, spec)) {
     return 'Return would lower the front-left foot through the elevated platform. The captured support point lies inside the paper footprint, and the platform was not cut away. The descent was not commanded.';
   }
   const end = memory.approach.footTarget;
   if (!end) return null;
   return footPathEntersPlatform(end, home, memory.config);
+}
+
+function boardTouch(sample: PhysicsSnapshot): string | null {
+  const ids = (['FL', 'FR', 'RL', 'RR'] as const).filter((id) => footOnPlatform(sample.feet[id]));
+  if (ids.length > 0) {
+    return `The ${ids.join(', ')} foot touched the low clipboard. Board contacts are not counted as ground support.`;
+  }
+  if ((sample.platformContactCount ?? 0) > 0) {
+    return `The low clipboard has ${sample.platformContactCount} contact(s). The step was not treated as a successful approach.`;
+  }
+  return null;
 }
 
 function platformTouch(sample: PhysicsSnapshot): string | null {

@@ -473,6 +473,44 @@ function boxCorners(parent: Transform, geom: BoxGeom): Vec3[] {
   return corners.map((corner) => add(corner, BODY_POSITION));
 }
 
+export interface BoardBox {
+  center: Vec3;
+  half: Vec3;
+}
+
+/**
+ * Foot sphere and calf cylinders against a floor-level board.
+ * Triangle meshes are not tested. A `valid` result is not collision-free.
+ * A missing or zero-thickness board is not evaluated.
+ */
+export function boardPrimitiveStatus(id: LegId, joints: Angles, board: BoardBox | null): CheckStatus {
+  if (!board || !(board.half[2] > 1e-4)) return 'not-evaluated';
+  const spec = LEGS[id];
+  const frames = legFrames(spec, joints);
+  const pose = forwardLeg(id, joints, [0, 0, 0]);
+  const sphere = add(pose.sphere, BODY_POSITION);
+  const min: Vec3 = [
+    board.center[0] - board.half[0],
+    board.center[1] - board.half[1],
+    board.center[2] - board.half[2],
+  ];
+  const max: Vec3 = [
+    board.center[0] + board.half[0],
+    board.center[1] + board.half[1],
+    board.center[2] + board.half[2],
+  ];
+  if (sphereHitsAabb(sphere, FOOT_SPHERE_RADIUS_M, min, max)) return 'invalid';
+  const sign = spec.thighOffsetY >= 0 ? 1 : -1;
+  const calves = sign > 0 ? CALF_LEFT : CALF_RIGHT;
+  for (const geom of calves) {
+    for (const point of cylinderEnds(frames.calf, geom)) {
+      const world = add(point, BODY_POSITION);
+      if (sphereHitsAabb(world, geom.radius, min, max)) return 'invalid';
+    }
+  }
+  return 'valid';
+}
+
 function sphereHitsAabb(centre: Vec3, radius: number, min: Vec3, max: Vec3): boolean {
   let distance = 0;
   for (let index = 0; index < 3; index += 1) {

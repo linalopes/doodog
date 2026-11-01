@@ -20,6 +20,7 @@
   let view: Go2View | null = null;
   let unreachableSamples = $state(0);
   let trailsHidden = false;
+  let showCollision = $state(false);
 
   const cache: { key: string; fingerprints: string[]; marks: TrailMark[] } = {
     key: '',
@@ -115,7 +116,6 @@
     const experiment = $simulationBackend === 'mujoco' ? $physicsRun.experiment : null;
     let marks: TrailMark[] = [];
     if (physics) {
-      if (pose && $physicsRun.config.mountProfile !== 'candidate-a') view.setPaper(pose);
       const mount = $physicsRun.config;
       if (mount.mountProfile === 'candidate-a') {
         const thickness = mount.platformThicknessM;
@@ -127,9 +127,34 @@
           widthM: mount.paperWidthM,
           heightM: mount.paperHeightM,
         });
-      } else {
+      } else if (mount.mountProfile === 'ground' && mount.boardThicknessM > 1e-4) {
+        const thickness = mount.boardThicknessM;
+        view.setPlatform({
+          center: [mount.paperOriginX, mount.paperOriginY, thickness / 2],
+          size: [mount.paperWidthM, mount.paperHeightM, thickness],
+          paperZ: thickness,
+          yawRad: mount.paperYawRad,
+          widthM: mount.paperWidthM,
+          heightM: mount.paperHeightM,
+        });
+      } else if (mount.mountProfile === 'ground') {
         view.setPlatform(null);
+        view.setSurface(
+          [mount.paperOriginX, mount.paperOriginY, 0],
+          mount.paperYawRad,
+          mount.paperWidthM,
+          mount.paperHeightM,
+        );
+      } else if (pose) {
+        view.setPlatform(null);
+        view.setPaper(pose);
       }
+      const feet = physics.feet;
+      view.setFootSpheres(
+        showCollision
+          ? [feet.FL.sphere, feet.FR.sphere, feet.RL.sphere, feet.RR.sphere]
+          : null,
+      );
       view.setPhysicsPose({
         joints: physics.joints,
         basePosition: physics.basePosition,
@@ -165,16 +190,31 @@
     } else if (pose) {
       trailsHidden = false;
       view.setPhysicsGuide(null);
-      view.setPlatform(null);
+      view.setFootSpheres(null);
       view.setPose(pose);
       if (lab.preview) {
         const offset = brushTipInFoot(lab.query.calibration);
-        view.setSurface(lab.query.origin, lab.query.yawRad, WORKSPACE_SHEET_M, WORKSPACE_SHEET_M);
+        const board = lab.query.boardThicknessM ?? 0;
+        if (board > 1e-4) {
+          view.setPlatform({
+            center: [lab.query.origin[0], lab.query.origin[1], board / 2],
+            size: [WORKSPACE_SHEET_M, WORKSPACE_SHEET_M, board],
+            paperZ: board,
+            yawRad: lab.query.yawRad,
+            widthM: WORKSPACE_SHEET_M,
+            heightM: WORKSPACE_SHEET_M,
+          });
+        } else {
+          view.setPlatform(null);
+          view.setSurface(lab.query.origin, lab.query.yawRad, WORKSPACE_SHEET_M, WORKSPACE_SHEET_M);
+        }
         view.setBrushes(
           { ...config.brushes.left, offset: [offset[0], offset[1], offset[2]] },
           config.brushes.right,
         );
         view.setBrushCalibration(lab.query.calibration);
+      } else {
+        view.setPlatform(null);
       }
       marks = syncMarks(trail, canvas, config);
       view.setMarks(marks);
@@ -359,8 +399,12 @@
   {/if}
 </div>
 
-<details class="viewport__details">
-  <summary>Pose measurements</summary>
+  <details class="viewport__details">
+    <summary>Pose measurements</summary>
+    <label class="viewport__note">
+      <input type="checkbox" bind:checked={showCollision} />
+      Show foot collision spheres
+    </label>
   <div class="viewport__details-body">
     {#if physicsLive}
       <p class="viewport__banner">Brush Geometry Preview — No Contact Physics</p>
@@ -379,6 +423,12 @@
             The turquoise marker is the commanded brush tip and the pink marker is the measured tip. A tip below the sheet is a signed distance, not contact.
             {#if experiment.config.mountProfile === 'candidate-a'}
               The gray block is the elevated collision platform. Its top is the paper. The brush shaft does not collide.
+            {/if}
+            {#if experiment.config.mountProfile === 'ground' && experiment.config.boardThicknessM > 0}
+              The gray block is the low clipboard. Its top is the paper and its underside is the floor.
+            {/if}
+            {#if experiment.config.mountProfile === 'ground' && experiment.config.boardThicknessM <= 0}
+              The paper lies on the floor. There is no collision board.
             {/if}
           {/if}
           This is not a safe path, and geometric paint is hidden.

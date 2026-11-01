@@ -10,6 +10,7 @@
     restoreBaseline,
     scheduleSample,
     selectWorkspaceCell,
+    startGroundSearch,
     setLabQuery,
     showSelectedPose,
     startCandidateSearch,
@@ -280,6 +281,7 @@
     </p>
     <div class="lab__actions">
       <button type="button" class="btn btn--small" onclick={startCandidateSearch} disabled={lab.searchRunning}>Search</button>
+      <button type="button" class="btn btn--small" onclick={startGroundSearch} disabled={lab.searchRunning}>Search ground sheet</button>
       <button type="button" class="btn btn--small" onclick={cancelCandidateSearch} disabled={!lab.searchRunning}>Cancel</button>
     </div>
     {#if lab.searchRunning || lab.searchExamined > 0}
@@ -288,11 +290,22 @@
         {lab.searchCancelled ? 'Cancelled.' : lab.searchRunning ? 'Running.' : 'Finished.'}
       </p>
     {/if}
-    {#each lab.searchResults.filter((item) => item.summary.candidate > 0).slice(0, 6) as item, index (`${item.origin.join(',')}-${item.calibration.pitchRad}-${item.calibration.rollRad}-${index}`)}
+    {#each (lab.searchKind === 'ground' ? lab.searchResults : lab.searchResults.filter((item) => item.summary.candidate > 0)).slice(0, 6) as item, index (`${item.origin.join(',')}-${item.calibration.pitchRad}-${item.calibration.rollRad}-${item.boardThicknessM ?? 'h'}-${index}`)}
       <article class="lab__candidate">
         <p class="mono">{mountText(item.calibration)}</p>
         <p class="mono">
           Paper {item.origin.map((value) => (value * 1000).toFixed(0)).join(', ')} mm · yaw {((item.yawRad * 180) / Math.PI).toFixed(0)}°
+          {#if item.boardThicknessM !== undefined}
+            · board {(item.boardThicknessM * 1000).toFixed(0)} mm · upper surface z = {item.origin[2].toFixed(3)} m
+          {/if}
+        </p>
+        <p class="help-text">
+          {item.homeBoardClear === false
+            ? 'Home-pose foot sphere intersects this board, so it is not an initialization candidate.'
+            : item.summary.largestRegion > 0
+              ? 'Geometrically promising on this sample.'
+              : 'Geometrically rejected on this sample.'}
+          Mesh collision not evaluated. Not dynamically tested here.
         </p>
         <p class="help-text">
           Candidates {item.summary.candidate} of {item.summary.examined} ({percent(item.summary.candidate, item.summary.examined)}).

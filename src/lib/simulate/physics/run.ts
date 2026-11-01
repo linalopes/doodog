@@ -19,7 +19,7 @@ import { selectSimulationBackend, simulationBackend } from './backend.ts';
 import { planPhysicsAdvance, physicsRequestedTime } from './clock.ts';
 import { createPhysicsClient, type PhysicsClient } from './client.ts';
 import type { ExperimentView, PhysicsMode } from './experiment.ts';
-import { applyMountProfile } from './candidate.ts';
+import { applyGroundCandidate, applyMountProfile, setBoardThickness } from './candidate.ts';
 import { DEFAULT_EXPERIMENT, EXPERIMENT_STEPS_PER_FRAME, TIMELINE_HOLD_NOTE, type ExperimentConfig } from './settings.ts';
 import { writable } from 'svelte/store';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
@@ -263,7 +263,19 @@ export async function setPhysicsMode(mode: PhysicsMode): Promise<void> {
   }
 }
 
-export async function selectMountProfile(profile: 'baseline' | 'candidate-a'): Promise<void> {
+export async function selectGroundCandidate(candidate: Parameters<typeof applyGroundCandidate>[1]): Promise<void> {
+  const next = applyGroundCandidate(get(physicsRun).config, candidate);
+  physicsRun.update((state) => ({ ...state, approachReady: false }));
+  await configureExperiment(next);
+}
+
+export async function selectBoardThickness(thicknessM: number): Promise<void> {
+  const next = setBoardThickness(get(physicsRun).config, thicknessM);
+  physicsRun.update((state) => ({ ...state, approachReady: false }));
+  await configureExperiment(next);
+}
+
+export async function selectMountProfile(profile: 'baseline' | 'candidate-a' | 'ground'): Promise<void> {
   const next = applyMountProfile(get(physicsRun).config, profile);
   if (profile !== 'candidate-a') {
     physicsRun.update((state) => ({ ...state, approachReady: false }));
@@ -296,7 +308,10 @@ export async function configureExperiment(config: ExperimentConfig): Promise<voi
       integrated: result.snapshot.time,
       config: result.experiment.config,
       notice: result.experiment.reason || state.notice,
-      approachReady: result.experiment.config.mountProfile === 'candidate-a' ? state.approachReady : false,
+      approachReady:
+        result.experiment.config.mountProfile === 'candidate-a' || result.experiment.config.mountProfile === 'ground'
+          ? state.approachReady
+          : false,
     }));
   } catch (error) {
     physicsRun.update((state) => ({
@@ -316,7 +331,7 @@ export async function startExperiment(): Promise<void> {
   try {
     const paper = get(simSettings).paper;
     const nextConfig =
-      run.config.mountProfile === 'candidate-a'
+      run.config.mountProfile === 'candidate-a' || run.config.mountProfile === 'ground'
         ? run.config
         : {
             ...run.config,
@@ -453,7 +468,7 @@ async function experimentFrame(): Promise<void> {
       approachReady:
         result.experiment.mode === 'brush-approach' &&
         result.experiment.outcome === 'completed' &&
-        result.experiment.config.mountProfile === 'candidate-a'
+        (result.experiment.config.mountProfile === 'candidate-a' || result.experiment.config.mountProfile === 'ground')
           ? true
           : state.approachReady,
     }));

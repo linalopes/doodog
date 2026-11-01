@@ -45,8 +45,14 @@ export interface CandidateCheck {
   reachErrorM: number | null;
 }
 
+export const GROUND_SHEET_NAME = 'Ground Sheet / Low Clipboard';
+
 export function isCandidate(config: ExperimentConfig): boolean {
   return config.mountProfile === 'candidate-a';
+}
+
+export function isGround(config: ExperimentConfig): boolean {
+  return config.mountProfile === 'ground';
 }
 
 export function platformSpec(config: ExperimentConfig): PlatformSpec | null {
@@ -64,7 +70,58 @@ export function platformSpec(config: ExperimentConfig): PlatformSpec | null {
   };
 }
 
+/**
+ * Floor-level board. The upper face is the drawing plane at z = thickness.
+ * The underside is the ground plane. Zero thickness returns null so the
+ * wrapper does not add a degenerate or coplanar box.
+ */
+export function boardSpec(config: ExperimentConfig): PlatformSpec | null {
+  if (!isGround(config)) return null;
+  const thickness = config.boardThicknessM;
+  if (!(thickness > 1e-4) || thickness > 0.0100001) return null;
+  if (!(config.paperWidthM > 0) || !(config.paperHeightM > 0)) return null;
+  return {
+    center: [config.paperOriginX, config.paperOriginY, thickness / 2],
+    half: [config.paperWidthM / 2, config.paperHeightM / 2, thickness / 2],
+    topZ: thickness,
+    bottomZ: 0,
+    thicknessM: thickness,
+  };
+}
+
+/** Collision box for the active profile. Baseline and a zero-thickness sheet have none. */
+export function collisionSpec(config: ExperimentConfig): PlatformSpec | null {
+  if (isCandidate(config)) return platformSpec(config);
+  if (isGround(config)) return boardSpec(config);
+  return null;
+}
+
 export function applyMountProfile(config: ExperimentConfig, profile: ExperimentConfig['mountProfile']): ExperimentConfig {
+  if (profile === 'ground') {
+    return {
+      ...config,
+      mountProfile: 'ground',
+      brushMountXM: 0.035,
+      brushMountYM: 0,
+      brushMountZM: 0,
+      brushRollRad: 0,
+      brushPitchRad: 0,
+      brushYawRad: 0,
+      brushLengthM: 0.045,
+      brushClearanceM: 0.01,
+      paperOriginX: 0.3,
+      paperOriginY: 0,
+      paperOriginZ: 0,
+      paperYawRad: 0,
+      paperWidthM: 0.2,
+      paperHeightM: 0.2,
+      boardThicknessM: 0,
+      returnStyle: 'gradual',
+      gestureKind: 'circle',
+      gestureRadiusM: AERIAL_RADIUS_M,
+      gestureSeconds: 4,
+    };
+  }
   if (profile !== 'candidate-a') {
     return {
       ...config,
@@ -83,6 +140,7 @@ export function applyMountProfile(config: ExperimentConfig, profile: ExperimentC
       paperYawRad: 0,
       paperWidthM: 0.2,
       paperHeightM: 0.2,
+      boardThicknessM: 0,
       returnStyle: 'baseline',
     };
   }
@@ -137,6 +195,70 @@ export function sphereHitsPlatform(centre: Vec3, radius: number, spec: PlatformS
 
 export function supportFootBlocked(foot: Vec3, spec: PlatformSpec): boolean {
   return sphereHitsPlatform(foot, FOOT_RADIUS_M, spec);
+}
+
+export function validateGroundPose(snapshot: PhysicsSnapshot, config: ExperimentConfig): CandidateCheck {
+  if (!isGround(config)) {
+    return { ok: true, reason: 'Not a ground sheet.', tip: null, angleDeg: null, footClearanceM: null, reachErrorM: null };
+  }
+  const spec = boardSpec(config);
+  const fl = snapshot.feet.FL;
+  const calibration = calibrationFrom(config);
+  const brush = brushWorld(fl.frame, fl.frameQuat, calibration);
+  const axis = quatRotate(brush.rotation, [0, 0, -1]);
+  const angleDeg = (brushAngleToPaper(axis) * 180) / Math.PI;
+  const footClearanceM = fl.sphere[2] - FOOT_RADIUS_M;
+  const floorNote = `The home keyframe FL foot clearance is ${(footClearanceM * 1000).toFixed(1)} mm. That floor penetration is pre-existing and is not a board intersection.`;
+  if (!spec) {
+    return {
+      ok: true,
+      reason: `Ground sheet with no collision board. The paper lies on the floor at z = 0. ${floorNote} Triangle meshes were not evaluated.`,
+      tip: brush.tip,
+      angleDeg,
+      footClearanceM,
+      reachErrorM: null,
+    };
+  }
+  const hits: string[] = [];
+  for (const id of ['FL', 'FR', 'RL', 'RR'] as const) {
+    const foot = snapshot.feet[id];
+    if (sphereHitsPlatform(foot.sphere, FOOT_RADIUS_M, spec)) hits.push(`${id} foot sphere`);
+    if (foot.onPlatform) hits.push(`${id} board contact`);
+  }
+  const boardHits = snapshot.contacts.filter(
+    (contact) => contact.geom1.includes('paper_platform') || contact.geom2.includes('paper_platform'),
+  );
+  if (boardHits.length > 0 || (snapshot.platformContactCount ?? 0) > 0) {
+    const detail =
+      boardHits.length > 0
+        ? boardHits
+            .map((contact) =>
+              contact.distanceM < 0
+                ? `${contact.geom1} × ${contact.geom2} penetration ${(-contact.distanceM * 1000).toFixed(1)} mm`
+                : `${contact.geom1} × ${contact.geom2} gap ${(contact.distanceM * 1000).toFixed(1)} mm`,
+            )
+            .join('; ')
+        : `${snapshot.platformContactCount} board contact(s)`;
+    hits.push(detail);
+  }
+  if (hits.length > 0) {
+    return {
+      ok: false,
+      reason: `Ground sheet was not started. The home pose intersects the ${ (spec.thicknessM * 1000).toFixed(0) } mm board: ${hits.join(', ')}. ${floorNote} Mesh interference beyond these contacts was not evaluated. The pose was not jumped.`,
+      tip: brush.tip,
+      angleDeg,
+      footClearanceM,
+      reachErrorM: null,
+    };
+  }
+  return {
+    ok: true,
+    reason: `Board upper surface ${spec.topZ.toFixed(3)} m, underside ${spec.bottomZ.toFixed(3)} m, thickness ${(spec.thicknessM * 1000).toFixed(1)} mm. No board contact at the home keyframe. Brush tip ${fmt(brush.tip)} m, shaft ${angleDeg.toFixed(1)}° from the inward normal. ${floorNote} Triangle meshes were not evaluated.`,
+    tip: brush.tip,
+    angleDeg,
+    footClearanceM,
+    reachErrorM: null,
+  };
 }
 
 export function validateCandidatePose(snapshot: PhysicsSnapshot, config: ExperimentConfig): CandidateCheck {
@@ -208,6 +330,54 @@ export function validateCandidatePose(snapshot: PhysicsSnapshot, config: Experim
     angleDeg,
     footClearanceM,
     reachErrorM: null,
+  };
+}
+
+/** Copy one geometric ground candidate into the experiment. The robot base is not moved. */
+export function applyGroundCandidate(
+  config: ExperimentConfig,
+  candidate: {
+    calibration: BrushCalibration;
+    origin: Vec3;
+    yawRad: number;
+    boardThicknessM?: number;
+  },
+): ExperimentConfig {
+  const thickness = Math.min(0.01, Math.max(0, candidate.boardThicknessM ?? candidate.origin[2]));
+  return {
+    ...config,
+    mountProfile: 'ground',
+    brushMountXM: candidate.calibration.mountOffset[0],
+    brushMountYM: candidate.calibration.mountOffset[1],
+    brushMountZM: candidate.calibration.mountOffset[2],
+    brushRollRad: candidate.calibration.rollRad,
+    brushPitchRad: candidate.calibration.pitchRad,
+    brushYawRad: candidate.calibration.yawRad,
+    brushLengthM: candidate.calibration.lengthM,
+    paperOriginX: candidate.origin[0],
+    paperOriginY: candidate.origin[1],
+    paperOriginZ: thickness,
+    paperYawRad: candidate.yawRad,
+    paperWidthM: 0.2,
+    paperHeightM: 0.2,
+    boardThicknessM: thickness,
+    brushClearanceM: 0.01,
+    returnStyle: 'gradual',
+    gestureKind: 'circle',
+    gestureRadiusM: AERIAL_RADIUS_M,
+    gestureSeconds: 4,
+  };
+}
+
+export function setBoardThickness(config: ExperimentConfig, thicknessM: number): ExperimentConfig {
+  const thickness = Math.min(0.01, Math.max(0, thicknessM));
+  return {
+    ...config,
+    mountProfile: 'ground',
+    boardThicknessM: thickness,
+    paperOriginZ: thickness,
+    paperWidthM: 0.2,
+    paperHeightM: 0.2,
   };
 }
 
