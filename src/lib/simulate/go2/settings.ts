@@ -70,8 +70,33 @@ export function setHelper(key: 'showGrid' | 'showFrames', value: boolean): void 
   simSettings.update((config) => ({ ...config, [key]: value }));
 }
 
+export function setPostureAware(value: boolean): void {
+  simSettings.update((config) => ({ ...config, postureAware: value }));
+}
+
+export function setBrushAxisTolerance(degrees: number): void {
+  if (!Number.isFinite(degrees)) return;
+  const brushAxisToleranceDeg = Math.min(90, Math.max(5, degrees));
+  simSettings.update((config) => ({ ...config, brushAxisToleranceDeg }));
+}
+
 export function followTimeline(): void {
   inspection.update((state) => ({ ...state, followTimeline: true }));
+}
+
+export function previewFrontLeft(joints: readonly [number, number, number], seed: Go2JointState | null): void {
+  inspection.update((state) => {
+    const source = seed ?? state.joints;
+    return {
+      followTimeline: false,
+      joints: {
+        FL: [joints[0], joints[1], joints[2]],
+        FR: [source.FR[0], source.FR[1], source.FR[2]],
+        RL: [source.RL[0], source.RL[1], source.RL[2]],
+        RR: [source.RR[0], source.RR[1], source.RR[2]],
+      },
+    };
+  });
 }
 
 export function setManualJoint(

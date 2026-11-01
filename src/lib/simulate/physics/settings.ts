@@ -55,6 +55,14 @@ export interface ExperimentConfig {
   paperYawRad: number;
   paperWidthM: number;
   paperHeightM: number;
+  /** Baseline keeps the original sheet. Candidate A is selected explicitly. */
+  mountProfile: 'baseline' | 'candidate-a';
+  /** Thickness of the elevated collision box. Unused while the profile is baseline. */
+  platformThicknessM: number;
+  /** Horizontal tip gesture above the sheet. The radius is capped at 5 mm. */
+  gestureKind: 'line' | 'circle';
+  gestureRadiusM: number;
+  gestureSeconds: number;
 }
 
 export const DEFAULT_EXPERIMENT: ExperimentConfig = {
@@ -88,6 +96,11 @@ export const DEFAULT_EXPERIMENT: ExperimentConfig = {
   paperYawRad: 0,
   paperWidthM: 0.2,
   paperHeightM: 0.2,
+  mountProfile: 'baseline',
+  platformThicknessM: 0.02,
+  gestureKind: 'circle',
+  gestureRadiusM: 0.005,
+  gestureSeconds: 4,
 };
 
 /** Physics steps advanced on each animation frame while an experiment is playing. */
@@ -166,6 +179,11 @@ export function clampConfig(config: ExperimentConfig): ExperimentConfig {
     paperYawRad: clamp(config.paperYawRad, -Math.PI, Math.PI, 0),
     paperWidthM: clamp(config.paperWidthM, 0.05, 0.5, 0.2),
     paperHeightM: clamp(config.paperHeightM, 0.05, 0.5, 0.2),
+    mountProfile: config.mountProfile === 'candidate-a' ? 'candidate-a' : 'baseline',
+    platformThicknessM: clamp(config.platformThicknessM, 0.01, 0.04, 0.02),
+    gestureKind: config.gestureKind === 'line' ? 'line' : 'circle',
+    gestureRadiusM: clamp(config.gestureRadiusM, 0.001, 0.005, 0.005),
+    gestureSeconds: clamp(config.gestureSeconds, 1, 8, 4),
   };
 }
 
@@ -184,7 +202,7 @@ export const BRUSH_NOTE =
   'Brush Geometry Preview — No Contact Physics. The shaft and the tip use one calibration: an attachment in the foot frame, then a length along the brush −Z axis, rotated with the simulated foot. The default attachment is 35 mm forward and the default length is 45 mm, which is the kinematic preview tip. It is not a measured hardware mount. A tip below the paper plane is a signed distance, not a collision. The sheet stays where it is.';
 
 export const APPROACH_NOTE =
-  'Brush Approach stands, shifts onto FR, RL and RR, lifts FL, then moves the brush tip toward a point above the paper centre. The clearance is a nominal height, starting at 10 mm. The path is checked for geometric reach before it runs. If the tip cannot reach that point from this stance and calibration, or the only solution lowers the front-left foot below the lift, the experiment stops at the lift and says so. The robot is not teleported and the paper is not moved. There is no paper collision and no brush pressure.';
+  'Brush Approach stands, shifts onto FR, RL and RR, lifts FL, then moves the brush tip toward a point above the paper centre. The clearance is a nominal height, starting at 10 mm. The path is checked for geometric reach before it runs. If the tip cannot reach that point from this stance and calibration, or the only solution lowers the front-left foot below the lift, the experiment stops at the lift and says so. The robot is not teleported and the paper is not moved. Baseline has no paper collision. Candidate A adds a static platform under the sheet. The brush tip is not a contact geom, and there is no brush pressure.';
 
 export const COMPLETION_NOTE =
   'Completed means every stage met its measurements: four feet on the floor and an upright body after Stand, the centre-of-mass projection at least 5 mm inside the FR–RL–RR triangle after Shift, the front-left foot off the floor and at least halfway up the requested lift after Lift and throughout Hold, and four feet on the floor again after Return. A projection inside that triangle is not dynamic stability, and it is not a safety result.';

@@ -72,9 +72,10 @@
     const visible = overlay.visible;
     const height = overlay.height;
     const columns = overlay.columns;
+    const qualification = overlay.qualification;
     const config = $simSettings;
     const size = canvasSize;
-    const query = { canvas: size, config, height };
+    const query = { canvas: size, config, height, qualification };
     const key = reachabilityKey(query, columns);
     if (!visible) {
       pending = false;
@@ -154,12 +155,20 @@
       canvas: canvasSize,
       config: $simSettings,
       height: overlay.height,
+      qualification: overlay.qualification,
     });
   }
 
   function brushLine(name: string, brush: PointReach['left']): string {
     if (!brush.active) return `${name} inactive`;
-    return `${name} ${brush.reachable ? 'reachable' : 'unreachable'} · ${millimetres(brush.positionErrorM)}`;
+    const position = brush.reachable ? 'position reached' : 'position missed';
+    if (overlay.qualification === 'posture' && brush.reachable && brush.posture === 'invalid') {
+      return `${name} ${position} · drawing posture invalid · ${millimetres(brush.positionErrorM)}`;
+    }
+    if (overlay.qualification === 'posture' && brush.reachable) {
+      return `${name} ${position} · no confirmed violation · ${millimetres(brush.positionErrorM)}`;
+    }
+    return `${name} ${position} · ${millimetres(brush.positionErrorM)}`;
   }
 </script>
 
@@ -192,6 +201,24 @@
         oninput={(event) => patchReachOverlay({ opacity: Number(event.currentTarget.value) })}
       />
     </label>
+    <div class="reach__heights" role="group" aria-label="Map question">
+      <button
+        type="button"
+        class="btn btn--small"
+        aria-pressed={overlay.qualification === 'position'}
+        onclick={() => patchReachOverlay({ qualification: 'position' })}
+      >
+        Position
+      </button>
+      <button
+        type="button"
+        class="btn btn--small"
+        aria-pressed={overlay.qualification === 'posture'}
+        onclick={() => patchReachOverlay({ qualification: 'posture' })}
+      >
+        Posture
+      </button>
+    </div>
     <div class="reach__heights" role="group" aria-label="Tip height">
       <button
         type="button"
@@ -248,6 +275,9 @@
         · {brushLine('Right', probe.right)}
       {:else}
         {heightLabel($simSettings, overlay.height)}
+        {#if overlay.qualification === 'posture'}
+          · turquoise is a reached pose with no confirmed geometric violation · pink is a reached pose that fails one · gray is not reached · mesh collision is not evaluated
+        {/if}
         {#if canvasAssumed}
           · canvas 600×600 assumed
         {/if}

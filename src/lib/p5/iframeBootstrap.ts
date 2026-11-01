@@ -500,7 +500,8 @@ ${PARAM_RUNTIME_SOURCE}
   function isBrush(value) {
     return !!value && typeof value === "object" &&
       isFiniteNumber(value.x) && isFiniteNumber(value.y) &&
-      typeof value.contact === "boolean";
+      typeof value.contact === "boolean" &&
+      (value.active === undefined || typeof value.active === "boolean");
   }
 
   function isFrame(value) {

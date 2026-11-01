@@ -27,6 +27,14 @@ export interface SimConfig {
   brushes: { left: BrushMount; right: BrushMount };
   showGrid: boolean;
   showFrames: boolean;
+  /**
+   * When true, the preview may replace the position-only pose with another
+   * pose inside the same 5 mm tolerance that fails fewer geometric checks.
+   * The search does not depend on the previous frame. Default is off.
+   */
+  postureAware: boolean;
+  /** Degrees between the brush axis and world −Z allowed for a drawing pose. */
+  brushAxisToleranceDeg: number;
 }
 
 export const DEFAULT_BRUSH_OFFSET: Vec3 = [0.035, 0, -0.045];
@@ -52,6 +60,8 @@ export function defaultSimConfig(): SimConfig {
     },
     showGrid: true,
     showFrames: true,
+    postureAware: false,
+    brushAxisToleranceDeg: 25,
   };
 }
 

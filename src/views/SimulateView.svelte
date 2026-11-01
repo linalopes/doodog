@@ -12,6 +12,7 @@
   import PhysicsDirector from '../lib/simulate/components/PhysicsDirector.svelte';
   import PhysicsPanel from '../lib/simulate/components/PhysicsPanel.svelte';
   import EvaluationPanel from '../lib/simulate/components/EvaluationPanel.svelte';
+  import WorkspacePanel from '../lib/simulate/components/WorkspacePanel.svelte';
   import Timeline from '../lib/simulate/components/Timeline.svelte';
   import { timeline } from '../lib/motion/timeline';
   import { simulationBackend } from '../lib/simulate/physics/backend';
@@ -24,6 +25,7 @@
    */
   const SECTIONS: SidebarSection[] = [
     { id: 'viewport', label: 'Viewport', hint: 'Live' },
+    { id: 'workspace', label: 'Brush mount', hint: 'Geometry' },
     { id: 'robot-model', label: 'Robot model', hint: 'Go2' },
     { id: 'physics', label: 'Physics', hint: 'Experimental' },
   ];
@@ -34,6 +36,12 @@
       description:
         'The shared timeline poses a kinematic Unitree Go2 from the sketch’s motion(t). MuJoCo can replace that preview with a physics experiment. The kinematic pose stays geometric.',
       tag: 'Preview',
+    },
+    workspace: {
+      title: 'Brush mount and workspace',
+      description:
+        'Try brush mounts and paper placements for the front-left leg. The map shows a geometric sample. It does not validate a drawing and it does not change the MuJoCo controller.',
+      tag: 'Exploration',
     },
     'robot-model': {
       title: 'Robot model',
@@ -95,6 +103,18 @@
         <PhysicsPanel />
         <EvaluationPanel />
       {/if}
+    </div>
+  {:else if current === 'workspace'}
+    <div class="layout">
+      <SimulationStage />
+      <WorkspacePanel />
+      <div class="layout__controls">
+        <div class="panel">
+          <p class="section-label">Playback</p>
+          <PlaybackControls />
+        </div>
+        <Timeline />
+      </div>
     </div>
   {:else if current === 'robot-model'}
     <RobotModelPanel />

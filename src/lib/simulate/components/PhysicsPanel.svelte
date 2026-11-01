@@ -10,7 +10,10 @@
     physicsRun,
     resetPhysics,
     resumeExperiment,
+    selectMountProfile,
     setPhysicsMode,
+    startAerialGesture,
+    startCandidateApproach,
     startExperiment,
     stepPhysicsOnce,
     stopExperiment,
@@ -44,6 +47,7 @@
     draw: 'Draw',
     track: 'Track Creative Score',
     approach: 'Approach',
+    gesture: 'Aerial gesture',
     hold: 'Hold',
     return: 'Return',
     done: 'Finished',
@@ -64,9 +68,14 @@
   const playing = $derived(experiment?.playback === 'playing');
   const controlled = $derived(run.mode !== 'motors-off');
   const stance = $derived(
-    run.mode === 'three-leg' || run.mode === 'air-draw' || run.mode === 'score' || run.mode === 'brush-approach',
+    run.mode === 'three-leg' ||
+      run.mode === 'air-draw' ||
+      run.mode === 'score' ||
+      run.mode === 'brush-approach' ||
+      run.mode === 'aerial-gesture',
   );
-  const approaching = $derived(run.mode === 'brush-approach');
+  const approaching = $derived(run.mode === 'brush-approach' || run.mode === 'aerial-gesture');
+  const candidate = $derived(run.config.mountProfile === 'candidate-a');
   const drawing = $derived(run.mode === 'air-draw');
   const scoring = $derived(run.mode === 'score');
   const clock = $derived($timeline);
@@ -174,6 +183,45 @@
       </button>
     {/each}
   </div>
+  <div class="physics__actions" role="group" aria-label="Brush mount">
+    <button
+      type="button"
+      class="btn btn--small"
+      aria-pressed={!candidate}
+      onclick={() => void selectMountProfile('baseline')}
+    >
+      Baseline
+    </button>
+    <button
+      type="button"
+      class="btn btn--small"
+      aria-pressed={candidate}
+      onclick={() => void selectMountProfile('candidate-a')}
+    >
+      Candidate A — Elevated Sheet / 45° Brush
+    </button>
+  </div>
+  {#if candidate}
+    <p class="muted">
+      FL attachment (35, 0, 0) mm, shaft 45 mm, pitch +45°, roll 0°, yaw 0°. Paper 200 × 200 mm at (0.20, 0.08, 0.06) m, yaw 0°.
+      Platform thickness {(run.config.platformThicknessM * 1000).toFixed(0)} mm, top at the paper plane. Return is touch down first.
+      Clearance {(run.config.brushClearanceM * 1000).toFixed(0)} mm. Aerial radius {(run.config.gestureRadiusM * 1000).toFixed(0)} mm, {run.config.gestureKind}.
+      Changing this selection recompiles the MuJoCo model and resets the pose to the home keyframe. Platform collision is on. The brush tip is not a collision geom. This is not a hardware safety result.
+    </p>
+    <div class="physics__actions">
+      <button type="button" class="btn btn--small" disabled={!ready || playing || run.preparing} onclick={() => void startCandidateApproach()}>
+        Start Approach
+      </button>
+      <button
+        type="button"
+        class="btn btn--small"
+        disabled={!ready || playing || run.preparing || !run.approachReady}
+        onclick={() => void startAerialGesture()}
+      >
+        Start Aerial Gesture
+      </button>
+    </div>
+  {/if}
   <div class="physics__actions">
     <button type="button" class="btn btn--small" disabled={run.status === 'loading'} onclick={() => void initializePhysics()}>
       {run.status === 'loading' ? 'Loading…' : 'Initialize'}
@@ -417,6 +465,9 @@
         {#if approaching}
           <li><span>Approach</span> {flag(experiment.criteria.approach)}</li>
         {/if}
+        {#if experiment.mode === 'aerial-gesture'}
+          <li><span>Gesture</span> {flag(experiment.criteria.gesture)}</li>
+        {/if}
         <li><span>Hold</span> {flag(experiment.criteria.hold)}</li>
         <li><span>Return</span> {flag(experiment.criteria.return)}</li>
       </ul>
@@ -429,6 +480,10 @@
         <div><dt>Geometric gap</dt><dd>{experiment.approach.geometricErrorM === null ? '—' : `${(experiment.approach.geometricErrorM * 1000).toFixed(1)} mm`}</dd></div>
         <div><dt>Paper snapshot</dt><dd>{run.config.paperOriginX.toFixed(3)}, {run.config.paperOriginY.toFixed(3)}, {run.config.paperOriginZ.toFixed(3)} m · {(run.config.paperWidthM * 100).toFixed(0)} × {(run.config.paperHeightM * 100).toFixed(0)} cm</dd></div>
         <div><dt>Tip to paper</dt><dd>{tipRelation(experiment.approach.measuredTip)}</dd></div>
+        <div><dt>Tip tracking</dt><dd>{experiment.approach.tipSamples > 0 ? `max ${(experiment.approach.tipMaxErrorM * 1000).toFixed(1)} mm · RMS ${(Math.sqrt(experiment.approach.tipErrorSumSq / experiment.approach.tipSamples) * 1000).toFixed(1)} mm` : '—'}</dd></div>
+        <div><dt>Shaft angle</dt><dd>{experiment.approach.maxAngleDeg === null ? '—' : `${experiment.approach.maxAngleDeg.toFixed(1)}° from the inward normal`}</dd></div>
+        <div><dt>Platform contacts</dt><dd>{snapshot ? (snapshot.platformContactCount ?? 0) : '—'} · foot touches {experiment.approach.platformTouches}</dd></div>
+        <div><dt>Support margin</dt><dd>{metres(experiment.peaks.minThreeLegMarginM, 1)} · roll {degrees(experiment.peaks.maxAbsRollRad)} · pitch {degrees(experiment.peaks.maxAbsPitchRad)} · torque {experiment.peaks.maxTorqueNm.toFixed(1)} Nm{experiment.peaks.saturated ? ' · saturated' : ''}</dd></div>
       </dl>
       {#if experiment.approach.note}
         <p class="muted">{experiment.approach.note}</p>

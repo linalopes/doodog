@@ -30,7 +30,7 @@ import type { PoseSnapshot, TrailMark } from '../go2/pose.ts';
 import type { Go2JointState } from '../adapters/types.ts';
 import type { QuatWxyz } from '../physics/types.ts';
 
-export type CameraView = 'perspective' | 'top' | 'side';
+export type CameraView = 'perspective' | 'top' | 'side' | 'front';
 
 export interface PhysicsMeshPose {
   joints: Go2JointState;
@@ -72,6 +72,24 @@ export interface Go2View {
   setBrushes(left: BrushMount, right: BrushMount): void;
   /** Places the FL shaft from the attachment to the tip. Null keeps the kinematic mount. */
   setBrushCalibration(calibration: BrushCalibration | null): void;
+  /** Moves the sheet without changing the creative-score trail. */
+  setSurface(origin: Vec3, yawRad: number, widthM: number, heightM: number): void;
+  /** Elevated collision slab. Null hides it and leaves the paper where setPaper or setSurface put it. */
+  setPlatform(
+    platform: {
+      center: Vec3;
+      size: Vec3;
+      paperZ: number;
+      yawRad: number;
+      widthM: number;
+      heightM: number;
+    } | null,
+  ): void;
+  /** Paper-grid marks for the mount lab. Null hides them. The turquoise dot is the selection. */
+  setWorkspace(
+    marks: readonly { position: Vec3; kind: 'unreachable' | 'posture-invalid' | 'candidate' | 'indeterminate' }[] | null,
+    selection: { target: Vec3; sphere: Vec3 | null; clearanceM: number | null } | null,
+  ): void;
   setView(view: CameraView): void;
   resize(): void;
   dispose(): void;
@@ -184,6 +202,13 @@ export function createGo2View(
   frames.push(paperAxes);
   scene.add(paper);
 
+  const platform = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xcad8d8, roughness: 0.85 }),
+  );
+  platform.visible = false;
+  scene.add(platform);
+
   const lines = {
     desiredLeft: makeLine(0x22113e, true),
     desiredRight: makeLine(0xea7dff, true),
@@ -191,12 +216,31 @@ export function createGo2View(
     achievedRight: makeLine(0x08f2db, false),
     paintLeft: makeLine(0x22113e, false),
     paintRight: makeLine(0xea7dff, false),
+    rejectedLeft: makeLine(0xea7dff, true),
+    rejectedRight: makeLine(0xea7dff, true),
     support: makeLine(0x08f2db, false),
     triangle: makeLine(0x22113e, true),
     com: makeLine(0xea7dff, false),
     target: makeLine(0x22113e, true),
   };
   for (const line of Object.values(lines)) scene.add(line);
+  const axisLine = makeLine(0x08f2db, false);
+  scene.add(axisLine);
+  const workspaceGeometry = new THREE.BufferGeometry();
+  const workspacePoints = new THREE.Points(
+    workspaceGeometry,
+    new THREE.PointsMaterial({ size: 0.016, vertexColors: true, sizeAttenuation: true }),
+  );
+  workspacePoints.visible = false;
+  scene.add(workspacePoints);
+  const workspacePick = new THREE.Mesh(
+    new THREE.SphereGeometry(0.01, 12, 10),
+    new THREE.MeshBasicMaterial({ color: 0x08f2db }),
+  );
+  workspacePick.visible = false;
+  scene.add(workspacePick);
+  const clearanceLine = makeLine(0xea7dff, false);
+  scene.add(clearanceLine);
   const comDot = new THREE.Mesh(
     new THREE.SphereGeometry(0.012, 16, 12),
     new THREE.MeshBasicMaterial({ color: 0xea7dff }),
@@ -259,6 +303,9 @@ export function createGo2View(
     } else if (view === 'side') {
       camera.position.set(0.28, -1.25, 0.32);
       controls.target.set(0.28, 0, 0.12);
+    } else if (view === 'front') {
+      camera.position.set(1.35, 0, 0.28);
+      controls.target.set(0.2, 0, 0.12);
     } else {
       camera.position.set(0.85, -0.95, 0.58);
       controls.target.set(0.22, 0, 0.1);
@@ -270,6 +317,7 @@ export function createGo2View(
   function setHelpers(showGrid: boolean, showFrames: boolean): void {
     grid.visible = showGrid;
     for (const helper of frames) helper.visible = showFrames;
+    axisLine.visible = showFrames;
     requestRender();
   }
 
@@ -307,6 +355,92 @@ export function createGo2View(
     if (shaftMaterial instanceof THREE.MeshStandardMaterial) shaftMaterial.color.setHex(0x22113e);
     if (tipMaterial instanceof THREE.MeshStandardMaterial) tipMaterial.color.setHex(0xea7dff);
     if (attachmentMaterial instanceof THREE.MeshStandardMaterial) attachmentMaterial.color.setHex(0x08f2db);
+    nodes.brush.updateWorldMatrix(true, true);
+    const tipWorld = new THREE.Vector3();
+    nodes.tip.getWorldPosition(tipWorld);
+    const worldDir = direction.clone().transformDirection(nodes.brush.matrixWorld);
+    if (worldDir.lengthSq() > 1e-8) {
+      worldDir.normalize();
+      setSegments(axisLine, [[
+        [tipWorld.x, tipWorld.y, tipWorld.z],
+        [tipWorld.x + worldDir.x * 0.08, tipWorld.y + worldDir.y * 0.08, tipWorld.z + worldDir.z * 0.08],
+      ]]);
+    }
+    requestRender();
+  }
+
+  function setSurface(origin: Vec3, yawRad: number, widthM: number, heightM: number): void {
+    paper.position.set(origin[0], origin[1], origin[2] + 0.001);
+    paper.scale.set(Math.max(widthM, 0.01), Math.max(heightM, 0.01), 1);
+    paper.rotation.z = yawRad;
+    requestRender();
+  }
+
+  function setPlatform(
+    spec: {
+      center: Vec3;
+      size: Vec3;
+      paperZ: number;
+      yawRad: number;
+      widthM: number;
+      heightM: number;
+    } | null,
+  ): void {
+    if (!spec) {
+      platform.visible = false;
+      requestRender();
+      return;
+    }
+    platform.visible = true;
+    platform.position.set(spec.center[0], spec.center[1], spec.center[2]);
+    platform.scale.set(Math.max(spec.size[0], 0.01), Math.max(spec.size[1], 0.01), Math.max(spec.size[2], 0.001));
+    platform.rotation.z = spec.yawRad;
+    paper.position.set(spec.center[0], spec.center[1], spec.paperZ);
+    paper.scale.set(Math.max(spec.widthM, 0.01), Math.max(spec.heightM, 0.01), 1);
+    paper.rotation.z = spec.yawRad;
+    requestRender();
+  }
+
+  function setWorkspace(
+    marks: readonly { position: Vec3; kind: 'unreachable' | 'posture-invalid' | 'candidate' | 'indeterminate' }[] | null,
+    selection: { target: Vec3; sphere: Vec3 | null; clearanceM: number | null } | null,
+  ): void {
+    const count = marks?.length ?? 0;
+    if (!marks || count === 0) {
+      workspacePoints.visible = false;
+    } else {
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+      marks.forEach((mark, index) => {
+        positions.set([mark.position[0], mark.position[1], mark.position[2] + 0.008], index * 3);
+        const rgb = mark.kind === 'candidate'
+          ? [34, 17, 62]
+          : mark.kind === 'posture-invalid'
+            ? [234, 125, 255]
+            : mark.kind === 'indeterminate'
+              ? [200, 189, 212]
+              : [202, 216, 216];
+        colors.set([(rgb[0] ?? 0) / 255, (rgb[1] ?? 0) / 255, (rgb[2] ?? 0) / 255], index * 3);
+      });
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      workspacePoints.geometry.dispose();
+      workspacePoints.geometry = geometry;
+      workspacePoints.visible = true;
+    }
+    if (selection) {
+      workspacePick.visible = true;
+      workspacePick.position.set(selection.target[0], selection.target[1], selection.target[2] + 0.012);
+      if (selection.sphere) {
+        setSegments(clearanceLine, [[selection.sphere, [selection.sphere[0], selection.sphere[1], 0]]]);
+      } else {
+        setSegments(clearanceLine, []);
+      }
+    } else {
+      workspacePick.visible = false;
+      setSegments(clearanceLine, []);
+    }
     requestRender();
   }
 
@@ -342,6 +476,18 @@ export function createGo2View(
       RR: [snapshot.legs.RR.joints[0], snapshot.legs.RR.joints[1], snapshot.legs.RR.joints[2]],
     });
     setPaper(snapshot);
+    const fl = snapshot.legs.FL;
+    const axis = fl.posture?.brushAxis;
+    const tip = fl.tipWorld;
+    if (axis && tip) {
+      setSegments(axisLine, [[
+        [tip[0], tip[1], tip[2]],
+        [tip[0] + axis[0] * 0.08, tip[1] + axis[1] * 0.08, tip[2] + axis[2] * 0.08],
+      ]]);
+    } else {
+      setSegments(axisLine, []);
+    }
+    requestRender();
   }
 
   function setPhysicsPose(pose: PhysicsMeshPose): void {
@@ -409,6 +555,8 @@ export function createGo2View(
     setSegments(lines.achievedRight, right.achieved);
     setSegments(lines.paintLeft, raise(left.paint, 0.006));
     setSegments(lines.paintRight, raise(right.paint, 0.006));
+    setSegments(lines.rejectedLeft, raise(left.rejected, 0.008));
+    setSegments(lines.rejectedRight, raise(right.rejected, 0.008));
     requestRender();
   }
 
@@ -437,6 +585,9 @@ export function createGo2View(
     setHelpers,
     setBrushes,
     setBrushCalibration,
+    setSurface,
+    setPlatform,
+    setWorkspace,
     setView,
     resize,
     dispose() {

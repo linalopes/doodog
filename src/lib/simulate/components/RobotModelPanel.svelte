@@ -1,5 +1,6 @@
 <script lang="ts">
   import { LEGS, LEG_IDS, GO2_MODEL, type LegId } from '../go2/model';
+  import { orientationOnSheet } from '../go2/posture';
   import {
     followTimeline,
     inspection,
@@ -43,6 +44,12 @@
   function metres(value: number | null | undefined): string {
     if (value === null || value === undefined || !Number.isFinite(value)) return '—';
     return value.toFixed(3);
+  }
+
+  let workspace = $state<{ examined: number; onSheet: number } | null>(null);
+
+  function sampleWorkspace(): void {
+    workspace = orientationOnSheet($simSettings, ($simSettings.brushAxisToleranceDeg * Math.PI) / 180);
   }
 
   function vec(value: readonly number[] | null | undefined): string {
@@ -116,6 +123,15 @@
           <div><dt>Tip</dt><dd class="mono">{vec(report.tipWorld)} m</dd></div>
           <div><dt>Target</dt><dd class="mono">{vec(report.targetWorld)} m</dd></div>
           <div><dt>Error</dt><dd class="mono">{metres(report.positionErrorM === null ? null : report.positionErrorM * 1000)} mm</dd></div>
+          <div><dt>Brush axis</dt><dd class="mono">{vec(report.posture.brushAxis)}</dd></div>
+          <div><dt>Axis angle</dt><dd class="mono">{((report.posture.brushAngleRad * 180) / Math.PI).toFixed(1)}°</dd></div>
+          <div><dt>Joints</dt><dd class="mono">{report.posture.joints}{report.posture.nearLimit ? ', near a limit' : ''}</dd></div>
+          <div><dt>Floor</dt><dd class="mono">{report.posture.floor}, {(report.posture.linkClearanceM * 1000).toFixed(1)} mm</dd></div>
+          <div><dt>Sphere clearance</dt><dd class="mono">{(report.posture.footClearanceM * 1000).toFixed(1)} mm</dd></div>
+          <div><dt>Midline</dt><dd class="mono">{report.posture.contralateral === 'invalid' ? 'crosses' : 'same side'}</dd></div>
+          <div><dt>Torso primitives</dt><dd class="mono">{report.posture.torso}</dd></div>
+          <div><dt>Mesh</dt><dd class="mono">{report.posture.mesh}</dd></div>
+          <div><dt>Drawing posture</dt><dd class="mono">{report.posture.drawing}</dd></div>
         </dl>
       {/if}
     {/each}
@@ -172,6 +188,15 @@
     <p class="help-text">
       The sheet has its own size in metres. Scale is metres per canvas unit. Leave scale empty to
       derive it from the sheet and the reported canvas. The drawing is not resized to fit the legs.
+      A coarse sample of joint poses can show whether a downward, floor-clear, same-side brush
+      reaches this sheet. Sampling does not move the sheet.
+    </p>
+    <p class="help-text">
+      <button type="button" class="btn btn--small" onclick={sampleWorkspace}>Sample workspace</button>
+      {#if workspace}
+        {workspace.onSheet} of {workspace.examined} sampled poses put a downward, floor-clear, same-side tip on this sheet.
+        Dynamic feasibility is unknown. The sheet was not moved.
+      {/if}
     </p>
     <div class="model__split">
       <label class="field">

@@ -19,6 +19,7 @@ import { selectSimulationBackend, simulationBackend } from './backend.ts';
 import { planPhysicsAdvance, physicsRequestedTime } from './clock.ts';
 import { createPhysicsClient, type PhysicsClient } from './client.ts';
 import type { ExperimentView, PhysicsMode } from './experiment.ts';
+import { applyMountProfile } from './candidate.ts';
 import { DEFAULT_EXPERIMENT, EXPERIMENT_STEPS_PER_FRAME, TIMELINE_HOLD_NOTE, type ExperimentConfig } from './settings.ts';
 import { writable } from 'svelte/store';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
@@ -41,6 +42,8 @@ export interface PhysicsRunState {
   /** True after Start until Reset. The creative clock must not move this pose. */
   controllerUsed: boolean;
   timelineFollow: boolean;
+  /** True after a completed Candidate A approach. Aerial Gesture stays disabled until then. */
+  approachReady: boolean;
   /** True while the sandbox is sampling a creative score for the next Start. */
   preparing: boolean;
 }
@@ -60,6 +63,7 @@ export const INITIAL_PHYSICS_RUN: PhysicsRunState = {
   experiment: null,
   controllerUsed: false,
   timelineFollow: true,
+  approachReady: false,
   preparing: false,
 };
 
@@ -155,23 +159,25 @@ export async function initializePhysics(): Promise<void> {
     let experiment = loaded.experiment;
     if (mode !== 'motors-off') experiment = await current.setMode(mode);
     if (ticket !== generation) return;
-    experiment = await current.configure(config);
+    const configured = await current.configure(config);
     if (ticket !== generation) return;
+    experiment = configured.experiment;
     physicsRun.set({
       status: 'ready',
       error: '',
-      notice: 'Reference posture. Motor commands are 0 Nm until a controller is started.',
+      notice: experiment.reason || 'Reference posture. Motor commands are 0 Nm until a controller is started.',
       activity: 'holding',
       epoch: get(timeline).time,
-      integrated: loaded.snapshot.time,
+      integrated: configured.snapshot.time,
       timestep: loaded.info.timestep,
       info: loaded.info,
-      snapshot: loaded.snapshot,
+      snapshot: configured.snapshot,
       mode,
       config: experiment.config,
       experiment,
       controllerUsed: false,
       timelineFollow: mode === 'motors-off',
+      approachReady: false,
       preparing: false,
     });
     void pump();
@@ -206,6 +212,7 @@ export async function resetPhysics(): Promise<void> {
       activity: 'holding',
       controllerUsed: false,
       timelineFollow: state.mode === 'motors-off',
+      approachReady: false,
       notice: 'Reset to the reference posture. Motor commands are 0 Nm.',
     }));
   } catch (error) {
@@ -256,13 +263,41 @@ export async function setPhysicsMode(mode: PhysicsMode): Promise<void> {
   }
 }
 
+export async function selectMountProfile(profile: 'baseline' | 'candidate-a'): Promise<void> {
+  const next = applyMountProfile(get(physicsRun).config, profile);
+  if (profile !== 'candidate-a') {
+    physicsRun.update((state) => ({ ...state, approachReady: false }));
+  }
+  await configureExperiment(next);
+}
+
+export async function startCandidateApproach(): Promise<void> {
+  physicsRun.update((state) => ({ ...state, approachReady: false }));
+  await setPhysicsMode('brush-approach');
+  await startExperiment();
+}
+
+export async function startAerialGesture(): Promise<void> {
+  if (!get(physicsRun).approachReady) return;
+  await setPhysicsMode('aerial-gesture');
+  await startExperiment();
+}
+
 export async function configureExperiment(config: ExperimentConfig): Promise<void> {
   physicsRun.update((state) => ({ ...state, config }));
   const current = client;
   if (!current || get(physicsRun).status !== 'ready') return;
   try {
-    const experiment = await current.configure(config);
-    physicsRun.update((state) => ({ ...state, experiment, config: experiment.config }));
+    const result = await current.configure(config);
+    physicsRun.update((state) => ({
+      ...state,
+      experiment: result.experiment,
+      snapshot: result.snapshot,
+      integrated: result.snapshot.time,
+      config: result.experiment.config,
+      notice: result.experiment.reason || state.notice,
+      approachReady: result.experiment.config.mountProfile === 'candidate-a' ? state.approachReady : false,
+    }));
   } catch (error) {
     physicsRun.update((state) => ({
       ...state,
@@ -280,17 +315,28 @@ export async function startExperiment(): Promise<void> {
   const epoch = currentScoreEpoch();
   try {
     const paper = get(simSettings).paper;
-    const snapped = await current.configure({
-      ...run.config,
-      paperOriginX: paper.origin[0],
-      paperOriginY: paper.origin[1],
-      paperOriginZ: paper.origin[2],
-      paperYawRad: paper.yawRad,
-      paperWidthM: paper.widthM,
-      paperHeightM: paper.heightM,
-    });
+    const nextConfig =
+      run.config.mountProfile === 'candidate-a'
+        ? run.config
+        : {
+            ...run.config,
+            paperOriginX: paper.origin[0],
+            paperOriginY: paper.origin[1],
+            paperOriginZ: paper.origin[2],
+            paperYawRad: paper.yawRad,
+            paperWidthM: paper.widthM,
+            paperHeightM: paper.heightM,
+          };
+    const snapped = await current.configure(nextConfig);
     if (ticket !== generation) return;
-    physicsRun.update((state) => ({ ...state, config: snapped.config, experiment: snapped }));
+    physicsRun.update((state) => ({
+      ...state,
+      config: snapped.experiment.config,
+      experiment: snapped.experiment,
+      snapshot: snapped.snapshot,
+      integrated: snapped.snapshot.time,
+      notice: snapped.experiment.reason || state.notice,
+    }));
     if (run.mode === 'score') {
       physicsRun.update((state) => ({
         ...state,
@@ -404,6 +450,12 @@ async function experimentFrame(): Promise<void> {
       integrated: result.snapshot.time,
       notice: result.experiment.reason,
       activity: result.experiment.playback === 'playing' ? 'integrating' : 'holding',
+      approachReady:
+        result.experiment.mode === 'brush-approach' &&
+        result.experiment.outcome === 'completed' &&
+        result.experiment.config.mountProfile === 'candidate-a'
+          ? true
+          : state.approachReady,
     }));
   } catch (error) {
     if (ticket !== generation) return;

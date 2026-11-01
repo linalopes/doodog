@@ -14,9 +14,11 @@ import type { SketchExample } from './types';
  * playback is continuous.
  */
 
-const SCORE_RUNTIME = `// The other brush stays lifted. The parameter panel can set params.brush to 'right'.
+const SCORE_RUNTIME = `// The other brush is resting: active false. It keeps a coordinate so older
+// readers still see a BrushTarget, and it does not command a leg.
+// The parameter panel can set params.brush to 'right'.
 function restingBrush() {
-  return { x: 22, y: height - 22, contact: false };
+  return { x: 22, y: height - 22, contact: false, active: false };
 }
 
 function pushLine(segments, x0, y0, x1, y1, contact, speed) {

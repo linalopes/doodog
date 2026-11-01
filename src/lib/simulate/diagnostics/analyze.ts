@@ -3,11 +3,11 @@
  *
  * `solvePose` is the only inverse kinematics used here. Nothing in this module
  * redraws the sketch, moves the Three.js scene, or changes the score.
- * A lifted brush is still solved. An inactive brush keeps the reference pose
- * and is left out of the event list by `collectEvents`.
+ * A lifted participating brush is still solved. An explicit resting channel
+ * (`active: false`) keeps the reference pose and is left out of the event list.
  */
 
-import type { MotionFrame, SketchMotionErrorCode } from '../../motion/types.ts';
+import type { ChannelRole, MotionFrame, SketchMotionErrorCode } from '../../motion/types.ts';
 import type { SimConfig } from '../go2/defaults.ts';
 import { solvePose, type PoseSnapshot } from '../go2/pose.ts';
 import { differentiateSeries } from './differentiate.ts';
@@ -28,6 +28,8 @@ export interface RawMotionSample {
 
 export interface BrushDiagnostic {
   active: boolean;
+  /** Creative role at this sample. Resting is not the same as a disabled mount. */
+  channel: ChannelRole | null;
   contact: boolean;
   joints: [number, number, number] | null;
   velocity: [number | null, number | null, number | null];
@@ -50,6 +52,7 @@ const EMPTY_TRIPLE: [number | null, number | null, number | null] = [null, null,
 function emptyBrush(contact: boolean): BrushDiagnostic {
   return {
     active: false,
+    channel: null,
     contact,
     joints: null,
     velocity: [...EMPTY_TRIPLE],
@@ -78,6 +81,7 @@ export function brushFromPose(
   const joints = copyJoints(leg.joints);
   return {
     active: leg.active,
+    channel: leg.channel,
     contact,
     joints,
     velocity: [...EMPTY_TRIPLE],

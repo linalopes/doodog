@@ -12,9 +12,17 @@ import { ASSUMED_CANVAS, type SimConfig } from './defaults.ts';
 import { solveLeg } from './kinematics.ts';
 import { mapBrushTarget } from './mapping.ts';
 import { BODY_POSITION } from './model.ts';
+import { assessPosture, type CheckStatus } from './posture.ts';
 
 export type ReachHeight = 'down' | 'up';
 export type ReachZone = 'both' | 'left' | 'right' | 'neither';
+export type ReachQualification = 'position' | 'posture';
+export type PostureShade = 'clear' | 'invalid';
+
+export const POSTURE_SHADE_RGB: Record<PostureShade, readonly [number, number, number]> = {
+  clear: [8, 242, 219],
+  invalid: [234, 125, 255],
+};
 
 export const REACH_DISCLAIMER =
   'Geometric reach only. This map does not show balance, force, collision-free motion, or a safe path.';
@@ -30,6 +38,8 @@ export interface ReachQuery {
   canvas: { width: number; height: number };
   config: SimConfig;
   height: ReachHeight;
+  /** Position keeps the existing zone colours. Posture recolours a reached cell by its geometric checks. */
+  qualification?: ReachQualification;
 }
 
 export interface BrushReach {
@@ -37,6 +47,8 @@ export interface BrushReach {
   reachable: boolean;
   /** Millimetres are derived from this. Null when the brush is inactive. */
   positionErrorM: number | null;
+  /** Null in the position-only map. Never `valid` while mesh collision is untested. */
+  posture: CheckStatus | null;
 }
 
 export interface PointReach {
@@ -48,6 +60,8 @@ export interface PointReach {
   mode: ReachHeight;
   left: BrushReach;
   right: BrushReach;
+  /** Null for the position-only map. Pink means a reached pose failed a geometric check. */
+  posture: PostureShade | null;
 }
 
 export interface ReachMap {
@@ -128,24 +142,39 @@ export function canvasDisplayRect(
 }
 
 export function reachabilityKey(query: ReachQuery, columns: number): string {
-  const { paper, mapping, brushes } = query.config;
+  const { paper, mapping, brushes, postureAware, brushAxisToleranceDeg } = query.config;
   return JSON.stringify({
     canvas: [query.canvas.width, query.canvas.height],
     height: query.height,
+    qualification: query.qualification ?? 'position',
     columns,
     paper,
     mapping,
     left: brushes.left,
     right: brushes.right,
+    postureAware,
+    brushAxisToleranceDeg,
   });
 }
 
-function brushReport(active: boolean, reachable: boolean, positionErrorM: number | null): BrushReach {
+function brushReport(
+  active: boolean,
+  reachable: boolean,
+  positionErrorM: number | null,
+  posture: CheckStatus | null,
+): BrushReach {
   return {
     active,
     reachable: active && reachable,
     positionErrorM: active ? positionErrorM : null,
+    posture: active ? posture : null,
   };
+}
+
+function postureShade(left: BrushReach, right: BrushReach): PostureShade | null {
+  const reached = [left, right].filter((brush) => brush.active && brush.reachable && brush.posture);
+  if (reached.length === 0) return null;
+  return reached.some((brush) => brush.posture === 'invalid') ? 'invalid' : 'clear';
 }
 
 export function classifyCanvasPoint(x: number, y: number, query: ReachQuery): PointReach {
@@ -166,11 +195,20 @@ export function classifyCanvasPoint(x: number, y: number, query: ReachQuery): Po
   const rightMount = query.config.brushes.right;
   const leftSolve = leftMount.active ? solveLeg('FL', mapped.body, leftMount.offset) : null;
   const rightSolve = rightMount.active ? solveLeg('FR', mapped.body, rightMount.offset) : null;
-  const left = brushReport(leftMount.active, leftSolve?.reachable ?? false, leftSolve?.positionErrorM ?? null);
+  const qualify = query.qualification === 'posture';
+  const tolerance = (query.config.brushAxisToleranceDeg * Math.PI) / 180;
+  const leftPosture = qualify && leftSolve
+    ? assessPosture('FL', leftSolve.joints, leftMount.offset, leftSolve.positionErrorM, tolerance).drawing
+    : null;
+  const rightPosture = qualify && rightSolve
+    ? assessPosture('FR', rightSolve.joints, rightMount.offset, rightSolve.positionErrorM, tolerance).drawing
+    : null;
+  const left = brushReport(leftMount.active, leftSolve?.reachable ?? false, leftSolve?.positionErrorM ?? null, leftPosture);
   const right = brushReport(
     rightMount.active,
     rightSolve?.reachable ?? false,
     rightSolve?.positionErrorM ?? null,
+    rightPosture,
   );
   return {
     canvasX: x,
@@ -180,6 +218,7 @@ export function classifyCanvasPoint(x: number, y: number, query: ReachQuery): Po
     mode: query.height,
     left,
     right,
+    posture: qualify ? postureShade(left, right) : null,
   };
 }
 
@@ -231,7 +270,7 @@ export function paintReachability(
   pixels: Uint8ClampedArray,
   pixelWidth: number,
   pixelHeight: number,
-  cells: readonly { zone: ReachZone }[],
+  cells: readonly { zone: ReachZone; posture?: PostureShade | null }[],
   columns: number,
   rows: number,
   opacity: number,
@@ -250,8 +289,8 @@ export function paintReachability(
         pixels[index + 3] = 0;
         continue;
       }
-      const rgb = REACH_ZONE_RGB[cell.zone];
-      const alpha = cell.zone === 'neither' ? gain * 0.45 : gain;
+      const rgb = cell.posture ? POSTURE_SHADE_RGB[cell.posture] : REACH_ZONE_RGB[cell.zone];
+      const alpha = cell.posture === 'clear' || cell.zone !== 'neither' ? gain : gain * 0.45;
       pixels[index] = rgb[0];
       pixels[index + 1] = rgb[1];
       pixels[index + 2] = rgb[2];

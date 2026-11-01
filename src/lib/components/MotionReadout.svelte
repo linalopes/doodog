@@ -4,6 +4,7 @@
   import { playbackMode } from '../motion/timelineMath';
   import { activeSketch } from '../sketches/store';
   import type { BrushTarget } from '../motion/types';
+  import { channelRole } from '../motion/types';
   import { formatSeconds } from '../utils/misc';
 
   /**
@@ -21,7 +22,9 @@
 
   function brushText(brush: BrushTarget | undefined): string {
     if (!brush) return '—';
-    return `${brush.x.toFixed(1)}, ${brush.y.toFixed(1)} · ${brush.contact ? 'down' : 'up'}`;
+    const role = channelRole(brush);
+    const label = role === 'drawing' ? 'drawing' : role === 'travel' ? 'travel' : 'resting';
+    return `${brush.x.toFixed(1)}, ${brush.y.toFixed(1)} · ${brush.contact ? 'down' : 'up'} · ${label}`;
   }
 </script>
 

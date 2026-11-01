@@ -6,7 +6,7 @@
  */
 
 import { writable } from 'svelte/store';
-import type { ReachHeight } from './reachability';
+import type { ReachHeight, ReachQualification } from './reachability';
 
 export interface ReachOverlayState {
   visible: boolean;
@@ -15,6 +15,8 @@ export interface ReachOverlayState {
   height: ReachHeight;
   /** Columns of the sampling grid. Rows follow the canvas aspect. */
   columns: number;
+  /** Position colours stay the left/right map. Posture recolours reached cells. */
+  qualification: ReachQualification;
 }
 
 export const REACH_COLUMN_CHOICES = [12, 16, 24, 32] as const;
@@ -24,6 +26,7 @@ const INITIAL: ReachOverlayState = {
   opacity: 0.4,
   height: 'down',
   columns: 16,
+  qualification: 'position',
 };
 
 const store = writable<ReachOverlayState>(INITIAL);

@@ -10,6 +10,17 @@
 
 import type { Go2JointState } from '../adapters/types.ts';
 import type { Quat, Vec3 } from '../go2/math.ts';
+import { quatRotate } from '../go2/math.ts';
+import { brushAngleToPaper } from '../go2/posture.ts';
+import {
+  aerialTip,
+  footOnPlatform,
+  isCandidate,
+  platformSpec,
+  sphereHitsPlatform,
+  supportFootBlocked,
+  validateCandidatePose,
+} from './candidate.ts';
 import { jointPd } from './pd.ts';
 import {
   circlePoint,
@@ -34,6 +45,7 @@ import {
   COMPLETION_NOTE,
   DEFAULT_EXPERIMENT,
   DRAW_MAX_ERROR_M,
+  FOOT_RADIUS_M,
   STANCE_CRITERIA,
   STAND_SECONDS,
   clampConfig,
@@ -61,9 +73,28 @@ import {
 
 export { CLOCK_NOTE, COMPLETION_NOTE };
 
-export type PhysicsMode = 'motors-off' | 'posture-hold' | 'three-leg' | 'air-draw' | 'score' | 'brush-approach';
+export type PhysicsMode =
+  | 'motors-off'
+  | 'posture-hold'
+  | 'three-leg'
+  | 'air-draw'
+  | 'score'
+  | 'brush-approach'
+  | 'aerial-gesture';
 
-export type StanceStage = 'idle' | 'posture' | 'stand' | 'shift' | 'lift' | 'draw' | 'track' | 'approach' | 'hold' | 'return' | 'done';
+export type StanceStage =
+  | 'idle'
+  | 'posture'
+  | 'stand'
+  | 'shift'
+  | 'lift'
+  | 'draw'
+  | 'track'
+  | 'approach'
+  | 'gesture'
+  | 'hold'
+  | 'return'
+  | 'done';
 
 export type ExperimentOutcome = 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'interrupted';
 
@@ -75,8 +106,10 @@ export interface StageCriteria {
   draw: boolean | null;
   /** Null for experiments that do not track a creative score. */
   track: boolean | null;
-  /** Null unless the run is a brush approach. True when the tip target was reachable and the stance held. */
+  /** Null unless the run is a brush approach or an aerial gesture. */
   approach: boolean | null;
+  /** Null unless the run is the small aerial gesture. */
+  gesture: boolean | null;
   hold: boolean | null;
   return: boolean | null;
 }
@@ -93,6 +126,16 @@ export interface ApproachState {
   measuredTip: Vec3 | null;
   /** Latest commanded tip. Null when no tip target is being commanded. */
   commandedTip: Vec3 | null;
+  /** Requested tip samples during approach, gesture, and hold. */
+  desired: Vec3[];
+  /** Measured tip samples for the same stages. */
+  achieved: Vec3[];
+  tipSamples: number;
+  tipErrorSumSq: number;
+  tipMaxErrorM: number;
+  minClearanceM: number | null;
+  maxAngleDeg: number | null;
+  platformTouches: number;
 }
 
 /** The creative trajectory, without the canvas samples, for the panel and the view. */
@@ -294,6 +337,7 @@ const EMPTY_CRITERIA: StageCriteria = {
   draw: null,
   track: null,
   approach: null,
+  gesture: null,
   hold: null,
   return: null,
 };
@@ -308,6 +352,14 @@ function emptyApproach(): ApproachState {
     note: '',
     measuredTip: null,
     commandedTip: null,
+    desired: [],
+    achieved: [],
+    tipSamples: 0,
+    tipErrorSumSq: 0,
+    tipMaxErrorM: 0,
+    minClearanceM: null,
+    maxAngleDeg: null,
+    platformTouches: 0,
   };
 }
 
@@ -514,6 +566,8 @@ export function viewOf(memory: ExperimentMemory): ExperimentView {
       liftFoot: memory.approach.liftFoot ? copyVec(memory.approach.liftFoot) : null,
       measuredTip: memory.approach.measuredTip ? copyVec(memory.approach.measuredTip) : null,
       commandedTip: memory.approach.commandedTip ? copyVec(memory.approach.commandedTip) : null,
+      desired: memory.approach.desired.map((point) => copyVec(point)),
+      achieved: memory.approach.achieved.map((point) => copyVec(point)),
     },
     evaluation: summarizeEvaluation(memory.evaluation.points),
     peaks: { ...memory.peaks },
@@ -584,6 +638,17 @@ export function begin(memory: ExperimentMemory, sample: PhysicsSnapshot): Experi
       'The body is already below the stand height. Reset to the home posture and start again. The pose was not jumped.';
     next.failure = next.reason;
     return next;
+  }
+  if (isCandidate(next.config)) {
+    const report = validateCandidatePose(sample, next.config);
+    if (!report.ok) {
+      next.playback = 'paused';
+      next.stage = 'done';
+      next.outcome = 'failed';
+      next.reason = report.reason;
+      next.failure = report.reason;
+      return next;
+    }
   }
   next.playback = 'playing';
   next.outcome = 'running';
@@ -684,6 +749,26 @@ export function commandFrom(
   }
 
   const plan = planTargets(next, sample);
+  if (isCandidate(next.config) && plan.flTarget && footEntersPlatform(plan.flTarget, next.config)) {
+    const note =
+      'The commanded front-left foot sphere would enter the elevated platform. The step was not applied. Platform collision stays on. The brush tip is not a contact geom.';
+    next.playback = 'paused';
+    next.stage = 'done';
+    next.outcome = 'failed';
+    next.failure = note;
+    next.reason = note;
+    return { memory: next, torques: zeros, integrate: false };
+  }
+  const intrusion = platformTouch(sample);
+  if (isCandidate(next.config) && intrusion) {
+    next.playback = 'paused';
+    next.stage = 'done';
+    next.outcome = 'failed';
+    next.failure = intrusion;
+    next.reason = intrusion;
+    next.approach.platformTouches += 1;
+    return { memory: next, torques: zeros, integrate: false };
+  }
   const limited = limitJointStep(next.targets, plan.joints, dt);
   const pd = jointPd(sample.joints, sample.jointVelocity, limited, next.targets, ranges, dt, next.config.gainScale);
   next.targets = limited;
@@ -691,11 +776,15 @@ export function commandFrom(
   next.unreachable = plan.unreachable;
   if (next.stage === 'draw' && plan.flTarget) observeDraw(next, sample, plan.flTarget, plan.unreachable.includes('FL'));
   if (next.stage === 'track' && plan.flTarget) observeScore(next, sample, plan.flTarget, plan.unreachable.includes('FL'));
-  if ((next.stage === 'approach' || next.stage === 'hold') && next.mode === 'brush-approach' && next.criteria.approach === true) {
+  if (tipExperiment(next.mode) && (next.stage === 'approach' || next.stage === 'gesture' || next.stage === 'hold')) {
+    observeTip(next, sample);
+  }
+  if ((next.stage === 'approach' || next.stage === 'gesture' || next.stage === 'hold') && tipExperiment(next.mode) && next.criteria.approach === true) {
     const held = sample.support.threeLegFeetDown && !sample.feet.FL.onFloor && sample.basePosition[2] >= STANCE_CRITERIA.moveHeightM;
     if (!held) {
       next.criteria.approach = false;
-      remember(next, 'The brush approach lost three-leg support or the front-left foot touched down.');
+      if (next.mode === 'aerial-gesture') next.criteria.gesture = false;
+      remember(next, 'The brush motion lost three-leg support or the front-left foot touched the ground. Platform contacts are counted separately.');
     }
   }
   next.stageTime += dt;
@@ -745,6 +834,16 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
     }
     memory.stage = 'lift';
     memory.stageTime = 0;
+    const blocked = liftEntersPlatform(sample, memory);
+    if (blocked) {
+      memory.criteria.lift = false;
+      memory.playback = 'paused';
+      memory.stage = 'done';
+      memory.outcome = 'failed';
+      memory.failure = blocked;
+      memory.reason = blocked;
+      return;
+    }
     memory.reason = 'Lift: raising the front-left foot with the other three feet down.';
     return;
   }
@@ -775,7 +874,7 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
       }
       return;
     }
-    if (memory.mode === 'brush-approach') {
+    if (tipExperiment(memory.mode)) {
       beginApproach(memory, sample);
       return;
     }
@@ -801,17 +900,47 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
     return;
   }
   if (memory.stage === 'approach') {
+    if (memory.mode === 'aerial-gesture') {
+      memory.stage = 'gesture';
+      memory.stageTime = 0;
+      memory.reason = 'Gesture: a small horizontal move of the brush tip above the sheet. The tip is not a contact.';
+      return;
+    }
     memory.stage = 'hold';
     memory.stageTime = 0;
     memory.criteria.hold = holdOk(sample, memory);
     memory.reason = 'Hold: keeping the brush tip at the clearance above the paper. This is not contact.';
     return;
   }
+  if (memory.stage === 'gesture') {
+    memory.criteria.gesture = gestureHeld(memory);
+    if (memory.criteria.gesture !== true) {
+      remember(memory, 'The aerial gesture exceeded the tip-tracking threshold or touched the platform.');
+    }
+    memory.stage = 'hold';
+    memory.stageTime = 0;
+    memory.criteria.hold = holdOk(sample, memory);
+    memory.reason = 'Hold: keeping the brush tip above the sheet after the gesture. This is not contact.';
+    return;
+  }
   if (memory.stage === 'hold') {
     if (memory.criteria.hold !== true) remember(memory, 'Hold lost the three-leg measurements.');
+    const blocked = returnEntersPlatform(memory);
+    if (blocked) {
+      memory.criteria.return = false;
+      memory.playback = 'paused';
+      memory.stage = 'done';
+      memory.outcome = 'failed';
+      memory.failure = blocked;
+      memory.reason = blocked;
+      return;
+    }
     memory.stage = 'return';
     memory.stageTime = 0;
-    memory.reason = 'Return: lowering the front-left foot.';
+    memory.reason =
+      memory.config.returnStyle === 'gradual'
+        ? 'Return: touching the front-left foot down before the body shifts back onto four legs.'
+        : 'Return: lowering the front-left foot.';
     return;
   }
   if (memory.stage === 'return') {
@@ -836,7 +965,9 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
           ? memory.criteria.track === true
           : memory.mode === 'brush-approach'
             ? memory.criteria.approach === true
-            : true;
+            : memory.mode === 'aerial-gesture'
+              ? memory.criteria.approach === true && memory.criteria.gesture === true
+              : true;
     const passed = stancePassed && gesturePassed;
     memory.outcome = passed ? 'completed' : 'failed';
     memory.reason = passed
@@ -846,7 +977,9 @@ function closeStage(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
           ? 'Completed. Every stage met its measurements, including the creative-score tracking threshold. This is not dynamic stability and it is not a safety result.'
           : memory.mode === 'brush-approach'
             ? 'Completed. The tip target was reachable and the stance held. The clearance is a plane distance, not contact, and this is not a safety result.'
-            : 'Completed. Every stage met its measurements. This is not dynamic stability and it is not a safety result.'
+            : memory.mode === 'aerial-gesture'
+              ? 'Completed. The approach and the small aerial gesture met their measurements. The tip is not a contact, and this is not a safety result.'
+              : 'Completed. Every stage met its measurements. This is not dynamic stability and it is not a safety result.'
       : memory.failure || 'The schedule finished without meeting every measurement.';
   }
 }
@@ -900,6 +1033,11 @@ function beginApproach(memory: ExperimentMemory, sample: PhysicsSnapshot): void 
     );
     return;
   }
+  const clipped = footPathEntersPlatform(liftFoot, solved.foot, memory.config);
+  if (clipped) {
+    fail(clipped);
+    return;
+  }
   memory.approach.reachable = true;
   memory.approach.note = 'The tip target is inside the geometric workspace. The move has not touched the paper.';
   memory.criteria.approach = true;
@@ -944,6 +1082,23 @@ function planTargets(
   }
   const tracking = memory.stage === 'track' && memory.score.buffer !== null && memory.score.origin !== null;
   if (tracking) feet.FL = scoreFoot(memory);
+  const brushing = tipExperiment(memory.mode);
+  if (brushing && memory.stage === 'gesture' && memory.approach.footTarget) {
+    const duration = memory.config.gestureSeconds;
+    const unit = duration > 0 ? Math.min(1, Math.max(0, memory.stageTime / duration)) : 1;
+    const tip = aerialTip(memory.config, unit);
+    const solvedTip = solveTipTarget(body, planted.orientation, tip, calibrationFrom(memory.config), sample.joints.FL);
+    memory.approach.commandedTip = tip;
+    memory.approach.geometricErrorM = solvedTip.errorM;
+    if (!solvedTip.reachable || footEntersPlatform(solvedTip.foot, memory.config)) {
+      memory.criteria.gesture = false;
+      memory.approach.reachable = false;
+      memory.approach.note = 'The aerial gesture tip left the reachable clearance above the sheet. The path was not rescaled.';
+    } else {
+      feet.FL = [solvedTip.foot[0], solvedTip.foot[1], solvedTip.foot[2]];
+      memory.approach.footTarget = feet.FL;
+    }
+  }
   const scoreHold = memory.mode === 'score' && memory.stage === 'hold' && memory.score.holdTarget !== null;
   const scoreReturn = memory.mode === 'score' && memory.stage === 'return' && memory.score.holdTarget !== null;
   if ((scoreHold || scoreReturn) && memory.score.holdTarget) {
@@ -967,9 +1122,9 @@ function planTargets(
       ];
     }
   }
-  const approachMove = memory.mode === 'brush-approach' && memory.stage === 'approach' && memory.approach.footTarget !== null && memory.approach.liftFoot !== null;
-  const approachHold = memory.mode === 'brush-approach' && memory.stage === 'hold' && memory.approach.footTarget !== null;
-  const approachReturn = memory.mode === 'brush-approach' && memory.stage === 'return' && memory.approach.footTarget !== null;
+  const approachMove = brushing && memory.stage === 'approach' && memory.approach.footTarget !== null && memory.approach.liftFoot !== null;
+  const approachHold = brushing && memory.stage === 'hold' && memory.approach.footTarget !== null;
+  const approachReturn = brushing && memory.stage === 'return' && memory.approach.footTarget !== null;
   if ((approachMove || approachHold || approachReturn) && memory.approach.footTarget && memory.approach.liftFoot) {
     const start = memory.approach.liftFoot;
     const end = memory.approach.footTarget;
@@ -1001,8 +1156,11 @@ function planTargets(
       feet.FL = [end[0], end[1], end[2]];
     }
   }
+  if (brushing && memory.approach.tipTarget && memory.stage !== 'gesture') {
+    memory.approach.commandedTip = memory.approach.tipTarget;
+  }
   const solved = jointsForFeet(body, planted.orientation, feet);
-  if (liftScale > 0.02 || drawing || tracking || scoreHold || approachMove || approachHold) {
+  if (liftScale > 0.02 || drawing || tracking || scoreHold || approachMove || approachHold || (brushing && memory.stage === 'gesture')) {
     // Support legs stay on the commanded body so the shift holds. The lifted
     // foot is solved from the measured body, so a lower body does not leave
     // the foot on the floor. An unreachable point is reported, not shrunk.
@@ -1029,7 +1187,7 @@ function applyMeasuredFoot(
 }
 
 function blend(memory: ExperimentMemory, kind: 'shift' | 'lift'): number {
-  if (memory.stage === 'hold' || memory.stage === 'draw' || memory.stage === 'track' || memory.stage === 'approach') return 1;
+  if (memory.stage === 'hold' || memory.stage === 'draw' || memory.stage === 'track' || memory.stage === 'approach' || memory.stage === 'gesture') return 1;
   if (memory.stage === 'return' && memory.config.returnStyle === 'gradual') {
     const unit = progress(memory);
     if (kind === 'lift') return unit >= 0.5 ? 0 : 1 - smoothstep(unit / 0.5);
@@ -1059,6 +1217,7 @@ function stageDuration(memory: ExperimentMemory): number | null {
     return trackStageSeconds(buffer, rate, memory.config.approachSeconds);
   }
   if (memory.stage === 'approach') return memory.config.brushMoveSeconds;
+  if (memory.stage === 'gesture') return memory.config.gestureSeconds;
   if (memory.stage === 'hold') return memory.config.holdSeconds;
   if (memory.stage === 'return') return memory.config.returnSeconds;
   return null;
@@ -1473,6 +1632,106 @@ function fresh(memory: ExperimentMemory): ExperimentMemory {
 function smoothstep(unit: number): number {
   const t = Math.min(1, Math.max(0, unit));
   return t * t * (3 - 2 * t);
+}
+
+function tipExperiment(mode: PhysicsMode): boolean {
+  return mode === 'brush-approach' || mode === 'aerial-gesture';
+}
+
+function footEntersPlatform(foot: Vec3, config: ExperimentConfig): boolean {
+  return footPathEntersPlatform(foot, foot, config) !== null;
+}
+
+function footPathEntersPlatform(start: Vec3, end: Vec3, config: ExperimentConfig): string | null {
+  if (!isCandidate(config)) return null;
+  const spec = platformSpec(config);
+  if (!spec) return null;
+  for (let step = 0; step <= 12; step += 1) {
+    const t = step / 12;
+    const point: Vec3 = [
+      start[0] + (end[0] - start[0]) * t,
+      start[1] + (end[1] - start[1]) * t,
+      start[2] + (end[2] - start[2]) * t,
+    ];
+    if (sphereHitsPlatform(point, FOOT_RADIUS_M, spec)) {
+      return `The front-left foot sphere would enter the elevated platform between (${fmtPoint(start)}) m and (${fmtPoint(end)}) m. The platform footprint was not cut away, and the foot was not commanded through it.`;
+    }
+  }
+  return null;
+}
+
+function liftEntersPlatform(sample: PhysicsSnapshot, memory: ExperimentMemory): string | null {
+  if (!isCandidate(memory.config)) return null;
+  const sphere = sample.feet.FL.sphere;
+  const buried = Math.max(0, -sample.feet.FL.clearanceM);
+  const raised: Vec3 = [sphere[0], sphere[1], sphere[2] + memory.config.liftHeightM + buried];
+  const blocked = footPathEntersPlatform(sphere, raised, memory.config);
+  if (!blocked) return null;
+  return `Lift would move the front-left foot sphere through the elevated platform. The foot is at (${sphere[0].toFixed(3)}, ${sphere[1].toFixed(3)}) m, under the sheet. Lift height stays ${(memory.config.liftHeightM * 1000).toFixed(0)} mm. ${blocked}`;
+}
+
+function returnEntersPlatform(memory: ExperimentMemory): string | null {
+  if (!isCandidate(memory.config) || !memory.planted) return null;
+  const home = memory.planted.feet.FL;
+  const spec = platformSpec(memory.config);
+  if (spec && supportFootBlocked(home, spec)) {
+    return 'Return would lower the front-left foot through the elevated platform. The captured support point lies inside the paper footprint, and the platform was not cut away. The descent was not commanded.';
+  }
+  const end = memory.approach.footTarget;
+  if (!end) return null;
+  return footPathEntersPlatform(end, home, memory.config);
+}
+
+function platformTouch(sample: PhysicsSnapshot): string | null {
+  const ids = (['FL', 'FR', 'RL', 'RR'] as const).filter((id) => footOnPlatform(sample.feet[id]));
+  if (ids.length > 0) {
+    return `The ${ids.join(', ')} foot touched the elevated platform. Platform contacts are not counted as ground support.`;
+  }
+  if ((sample.platformContactCount ?? 0) > 0) {
+    return `The elevated platform has ${sample.platformContactCount} contact(s) that are not foot-floor support.`;
+  }
+  return null;
+}
+
+function observeTip(memory: ExperimentMemory, sample: PhysicsSnapshot): void {
+  const measured = brushWorld(sample.feet.FL.frame, sample.feet.FL.frameQuat, calibrationFrom(memory.config));
+  memory.approach.measuredTip = measured.tip;
+  const paper = paperFrom(memory.config);
+  const clearance = measured.tip[2] - paper.origin[2];
+  memory.approach.minClearanceM =
+    memory.approach.minClearanceM === null ? clearance : Math.min(memory.approach.minClearanceM, clearance);
+  const axis = quatRotate(measured.rotation, [0, 0, -1]);
+  const angle = (brushAngleToPaper(axis) * 180) / Math.PI;
+  memory.approach.maxAngleDeg = memory.approach.maxAngleDeg === null ? angle : Math.max(memory.approach.maxAngleDeg, angle);
+  const commanded = memory.approach.commandedTip;
+  if (commanded) {
+    pushSparse(memory.approach.desired, commanded);
+    pushSparse(memory.approach.achieved, measured.tip);
+    if (memory.stage === 'gesture' || memory.stage === 'hold') {
+      const error = Math.hypot(measured.tip[0] - commanded[0], measured.tip[1] - commanded[1], measured.tip[2] - commanded[2]);
+      memory.approach.tipSamples += 1;
+      memory.approach.tipErrorSumSq += error * error;
+      memory.approach.tipMaxErrorM = Math.max(memory.approach.tipMaxErrorM, error);
+    }
+  }
+}
+
+function gestureHeld(memory: ExperimentMemory): boolean {
+  if (memory.criteria.approach !== true || memory.approach.reachable === false) return false;
+  if (memory.approach.platformTouches > 0) return false;
+  if (memory.approach.tipSamples < 1) return false;
+  return memory.approach.tipMaxErrorM <= DRAW_MAX_ERROR_M;
+}
+
+function pushSparse(path: Vec3[], point: Vec3): void {
+  const last = path[path.length - 1];
+  if (last && Math.hypot(point[0] - last[0], point[1] - last[1], point[2] - last[2]) < 0.001) return;
+  if (path.length > 240) path.shift();
+  path.push([point[0], point[1], point[2]]);
+}
+
+function fmtPoint(point: Vec3): string {
+  return point.map((value) => value.toFixed(3)).join(', ');
 }
 
 function zeroTorques(count: number): number[] {

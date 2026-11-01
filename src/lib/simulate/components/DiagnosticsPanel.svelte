@@ -176,11 +176,12 @@
   }
 
   function brushLine(name: string, brush: DiagnosticSample['left']): string {
-    if (!brush.active) return `${name} inactive`;
+    if (brush.channel === 'resting') return `${name} resting · reference pose`;
+    if (!brush.active) return `${name} mount off · reference pose`;
     const angle = brush.joints?.[joint];
     const velocity = brush.velocity[joint];
     const reach =
-      brush.reachable === null ? 'not solved' : brush.reachable ? 'reachable' : 'unreachable';
+      brush.reachable === null ? 'not solved' : brush.reachable ? 'position reached' : 'position missed';
     const error =
       brush.positionErrorM === null ? '—' : `${Math.round(brush.positionErrorM * 1000)} mm`;
     const angleText = angle === undefined ? '—' : `${(angle * RAD2DEG).toFixed(1)}°`;

@@ -37,6 +37,8 @@ export interface FootState {
   clearanceM: number;
   /** This foot geom is touching the floor geom. */
   onFloor: boolean;
+  /** This foot geom is touching the elevated paper platform. Not ground support. */
+  onPlatform?: boolean;
   /** Mean position of this foot's floor contacts. Null when it is not on the floor. */
   contact: [number, number, number] | null;
   /**
@@ -84,6 +86,8 @@ export interface PhysicsSnapshot {
   saturated: boolean;
   feet: FootStateMap;
   support: SupportState;
+  /** Contacts whose pair includes the elevated platform. Absent on older snapshots. */
+  platformContactCount?: number;
 }
 
 export type FootStateMap = Record<LegId, FootState>;

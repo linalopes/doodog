@@ -12,7 +12,7 @@ import type { Go2JointState } from '../adapters/types.ts';
 import { quatRotate } from '../go2/math.ts';
 import { LEGS } from '../go2/model.ts';
 import { rollPitch } from './attitude.ts';
-import { FLOOR_NOTE, TORQUE_NOTE, go2FloorSceneXml } from './scene.ts';
+import { FLOOR_NOTE, TORQUE_NOTE, go2FloorSceneXml, type PlatformGeom } from './scene.ts';
 import { FOOT_RADIUS_M } from './settings.ts';
 import { assessSupport, type Planar } from './support.ts';
 import {
@@ -90,6 +90,8 @@ interface MujocoModule {
 export interface PhysicsFiles {
   xml: string;
   assets: Readonly<Record<string, Uint8Array>>;
+  /** Null keeps the ground-only wrapper. Candidate A passes the elevated sheet. */
+  platform?: PlatformGeom | null;
 }
 
 export interface PhysicsSession {
@@ -179,7 +181,7 @@ function mountModel(fs: MujocoFs, files: PhysicsFiles): void {
   mkdir(fs, ROOT);
   mkdir(fs, `${ROOT}/assets`);
   writeFile(fs, `${ROOT}/go2.xml`, files.xml);
-  writeFile(fs, `${ROOT}/scene.xml`, go2FloorSceneXml());
+  writeFile(fs, `${ROOT}/scene.xml`, go2FloorSceneXml(files.platform ?? null));
   for (const [name, bytes] of Object.entries(files.assets)) {
     writeFile(fs, `${ROOT}/assets/${name}`, bytes);
   }
@@ -234,8 +236,15 @@ function readInfo(model: MjModel): PhysicsModelInfo {
 function geomNameTable(model: MjModel): string[] {
   const names: string[] = [];
   for (let index = 0; index < model.ngeom; index += 1) {
-    const name = model.geom(index).name;
-    names.push(name.length > 0 ? name : `unnamed geom ${index}`);
+    const geom = model.geom(index);
+    const name = geom.name;
+    if (name.length > 0) {
+      names.push(name);
+      continue;
+    }
+    const bodyId = Number((geom as { bodyid?: number }).bodyid ?? -1);
+    const body = bodyId >= 0 ? model.body(bodyId).name : '';
+    names.push(body.length > 0 ? `${body} collision ${index}` : `unnamed geom ${index}`);
   }
   return names;
 }
@@ -298,36 +307,42 @@ function readSnapshot(
     saturated,
     feet: feet.feet,
     support: readSupport(model, data, feet.feet),
+    platformContactCount: feet.platformContactCount,
   };
 }
 
 function readFeet(
   data: MjData,
   geomNames: readonly string[],
-): { feet: Record<LegId, FootState>; contacts: PhysicsContact[]; contactCount: number } {
-  const totals: Record<LegId, { count: number; x: number; y: number; z: number }> = {
+): { feet: Record<LegId, FootState>; contacts: PhysicsContact[]; contactCount: number; platformContactCount: number } {
+  const floors: Record<LegId, { count: number; x: number; y: number; z: number }> = {
     FL: { count: 0, x: 0, y: 0, z: 0 },
     FR: { count: 0, x: 0, y: 0, z: 0 },
     RL: { count: 0, x: 0, y: 0, z: 0 },
     RR: { count: 0, x: 0, y: 0, z: 0 },
   };
+  const platforms: Record<LegId, number> = { FL: 0, FR: 0, RL: 0, RR: 0 };
   const contactCount = data.ncon;
   const listed = data.contact;
   const contacts: PhysicsContact[] = [];
   const shown = Math.min(CONTACT_LIST, listed.size());
   const total = listed.size();
+  let platformContactCount = 0;
   for (let index = 0; index < total; index += 1) {
     const contact = listed.get(index);
     const geom1 = geomNames[contact.geom1] ?? `geom ${contact.geom1}`;
     const geom2 = geomNames[contact.geom2] ?? `geom ${contact.geom2}`;
     const foot = footOfPair(geom1, geom2);
     if (foot) {
-      const bucket = totals[foot];
+      const bucket = floors[foot];
       bucket.count += 1;
       bucket.x += Number(contact.pos[0] ?? 0);
       bucket.y += Number(contact.pos[1] ?? 0);
       bucket.z += Number(contact.pos[2] ?? 0);
     }
+    const raised = platformOfPair(geom1, geom2);
+    if (raised) platforms[raised] += 1;
+    if (geom1 === 'paper_platform' || geom2 === 'paper_platform') platformContactCount += 1;
     if (index < shown) contacts.push({ geom1, geom2, distanceM: contact.dist });
     contact.delete();
   }
@@ -335,7 +350,7 @@ function readFeet(
   const feet = {} as Record<LegId, FootState>;
   for (const id of JOINT_ORDER) {
     const sphere = vec3(data.geom(id).xpos);
-    const bucket = totals[id];
+    const bucket = floors[id];
     const calf = data.body(`${id}_calf`);
     const frameQuat: [number, number, number, number] = [
       Number(calf.xquat[0]),
@@ -349,6 +364,7 @@ function readFeet(
       sphere,
       clearanceM: sphere[2] - FOOT_RADIUS_M,
       onFloor: bucket.count > 0,
+      onPlatform: platforms[id] > 0,
       contact:
         bucket.count > 0
           ? [bucket.x / bucket.count, bucket.y / bucket.count, bucket.z / bucket.count]
@@ -361,7 +377,7 @@ function readFeet(
       frameQuat,
     };
   }
-  return { feet, contacts, contactCount };
+  return { feet, contacts, contactCount, platformContactCount };
 }
 
 function readSupport(model: MjModel, data: MjData, feet: Record<LegId, FootState>): SupportState {
@@ -410,6 +426,12 @@ function planar(foot: FootState): Planar {
 function footOfPair(geom1: string, geom2: string): LegId | null {
   if (geom1 === 'floor' && isFoot(geom2)) return geom2;
   if (geom2 === 'floor' && isFoot(geom1)) return geom1;
+  return null;
+}
+
+function platformOfPair(geom1: string, geom2: string): LegId | null {
+  if (geom1 === 'paper_platform' && isFoot(geom2)) return geom2;
+  if (geom2 === 'paper_platform' && isFoot(geom1)) return geom1;
   return null;
 }
 

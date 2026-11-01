@@ -25,7 +25,26 @@ export type BrushTarget = {
   y: number;
   /** True when the brush should touch the surface (draw), false when lifted. */
   contact: boolean;
+  /**
+   * False when this brush is not part of the composition.
+   * Omitted or true means the channel is participating. `contact` then
+   * distinguishes drawing from raised travel. A lifted brush is not resting.
+   */
+  active?: boolean;
 };
+
+/** How one brush channel is being used at this instant. Derived from the frame, not from speed. */
+export type ChannelRole = 'drawing' | 'travel' | 'resting';
+
+/**
+ * Drawing is a requested contact. Travel is a participating brush that is up.
+ * Resting is an explicit `active: false`. A missing `active` stays participating,
+ * so an older sketch that only sets `contact` still drives its leg.
+ */
+export function channelRole(target: BrushTarget): ChannelRole {
+  if (target.active === false) return 'resting';
+  return target.contact ? 'drawing' : 'travel';
+}
 
 /** A complete pose request for both drawing brushes at one instant. */
 export type MotionFrame = {
@@ -73,7 +92,8 @@ export function isBrushTarget(value: unknown): value is BrushTarget {
     Number.isFinite(v.x) &&
     typeof v.y === 'number' &&
     Number.isFinite(v.y) &&
-    typeof v.contact === 'boolean'
+    typeof v.contact === 'boolean' &&
+    (v.active === undefined || typeof v.active === 'boolean')
   );
 }
 

@@ -4,9 +4,11 @@
   import { motionTrail } from '../../motion/trail';
   import type { MotionFrame } from '../../motion/types';
   import type { SimConfig } from '../go2/defaults';
-  import { brushWorld, calibrationFrom } from '../go2/brush';
-  import { interpretFrame, PREVIEW_LABEL, type TrailMark } from '../go2/pose';
-  import { kinematicPose, setHelper, simSettings } from '../go2/settings';
+  import { brushTipInFoot, brushWorld, calibrationFrom } from '../go2/brush';
+  import { WORKSPACE_SHEET_M } from '../go2/workspace';
+  import { workspaceLab } from '../go2/workspaceLab';
+  import { interpretFrame, PREVIEW_LABEL, type LegReport, type TrailMark } from '../go2/pose';
+  import { kinematicPose, setBrushAxisTolerance, setHelper, setPostureAware, simSettings } from '../go2/settings';
   import { simulationBackend, selectSimulationBackend } from '../physics/backend';
   import { physicsRun } from '../physics/run';
   import { PHYSICS_LABEL } from '../physics/types';
@@ -25,15 +27,29 @@
     marks: [],
   };
 
+  function channelLine(name: 'FL' | 'FR', leg: LegReport): string {
+    const role = leg.channel === 'drawing' ? 'Drawing' : leg.channel === 'travel' ? 'Travel' : leg.channel === 'resting' ? 'Resting' : '—';
+    const contact = leg.channel === 'drawing' ? 'down' : leg.channel === null ? '—' : 'up';
+    const physical = name === 'FL' ? 'FL follows the left channel' : 'FR follows the right channel';
+    const pose = leg.active
+      ? physical
+      : leg.note.includes('Manual')
+        ? 'manual pose'
+        : 'reference pose';
+    return `${name} ${role} · ${contact} · ${pose}`;
+  }
+
   function frameFingerprint(frame: MotionFrame): string {
     return [
       frame.time,
       frame.left.x,
       frame.left.y,
       frame.left.contact,
+      frame.left.active === false ? 0 : 1,
       frame.right.x,
       frame.right.y,
       frame.right.contact,
+      frame.right.active === false ? 0 : 1,
     ].join('|');
   }
 
@@ -91,14 +107,29 @@
     const trail = $motionTrail;
     const canvas = $motionOutput.canvas;
     view.setHelpers(config.showGrid, config.showFrames);
-    view.setBrushes(config.brushes.left, config.brushes.right);
+    const lab = $workspaceLab;
     const physics = $simulationBackend === 'mujoco' ? $physicsRun.snapshot : null;
+    if (!lab.preview || physics) view.setBrushes(config.brushes.left, config.brushes.right);
     if (physics) view.setBrushCalibration(calibrationFrom($physicsRun.config));
-    else view.setBrushCalibration(null);
+    else if (!lab.preview) view.setBrushCalibration(null);
     const experiment = $simulationBackend === 'mujoco' ? $physicsRun.experiment : null;
     let marks: TrailMark[] = [];
     if (physics) {
-      if (pose) view.setPaper(pose);
+      if (pose && $physicsRun.config.mountProfile !== 'candidate-a') view.setPaper(pose);
+      const mount = $physicsRun.config;
+      if (mount.mountProfile === 'candidate-a') {
+        const thickness = mount.platformThicknessM;
+        view.setPlatform({
+          center: [mount.paperOriginX, mount.paperOriginY, mount.paperOriginZ - thickness / 2],
+          size: [mount.paperWidthM, mount.paperHeightM, thickness],
+          paperZ: mount.paperOriginZ,
+          yawRad: mount.paperYawRad,
+          widthM: mount.paperWidthM,
+          heightM: mount.paperHeightM,
+        });
+      } else {
+        view.setPlatform(null);
+      }
       view.setPhysicsPose({
         joints: physics.joints,
         basePosition: physics.basePosition,
@@ -106,7 +137,7 @@
       });
       const drawing = $physicsRun.mode === 'air-draw';
       const scoring = $physicsRun.mode === 'score';
-      const approaching = $physicsRun.mode === 'brush-approach';
+      const approaching = $physicsRun.mode === 'brush-approach' || $physicsRun.mode === 'aerial-gesture';
       const calibration = calibrationFrom($physicsRun.config);
       const measuredTip = brushWorld(physics.feet.FL.frame, physics.feet.FL.frameQuat, calibration).tip;
       view.setPhysicsGuide({
@@ -114,8 +145,14 @@
         triangle: $physicsRun.mode === 'three-leg' || drawing || scoring || approaching ? physics.support.threeLegTriangle : [],
         com: physics.support.com,
         flTarget: experiment?.flTarget ?? null,
-        desiredPath: drawing ? (experiment?.draw.desired ?? []) : [],
-        achievedPath: drawing ? (experiment?.draw.achieved ?? []) : scoring ? (experiment?.score.achieved ?? []) : [],
+        desiredPath: drawing ? (experiment?.draw.desired ?? []) : approaching ? (experiment?.approach.desired ?? []) : [],
+        achievedPath: drawing
+          ? (experiment?.draw.achieved ?? [])
+          : scoring
+            ? (experiment?.score.achieved ?? [])
+            : approaching
+              ? (experiment?.approach.achieved ?? [])
+              : [],
         brushDown: scoring ? (experiment?.score.desiredContact ?? []) : [],
         brushUp: scoring ? (experiment?.score.desiredTravel ?? []) : [],
         tipMeasured: measuredTip,
@@ -128,7 +165,17 @@
     } else if (pose) {
       trailsHidden = false;
       view.setPhysicsGuide(null);
+      view.setPlatform(null);
       view.setPose(pose);
+      if (lab.preview) {
+        const offset = brushTipInFoot(lab.query.calibration);
+        view.setSurface(lab.query.origin, lab.query.yawRad, WORKSPACE_SHEET_M, WORKSPACE_SHEET_M);
+        view.setBrushes(
+          { ...config.brushes.left, offset: [offset[0], offset[1], offset[2]] },
+          config.brushes.right,
+        );
+        view.setBrushCalibration(lab.query.calibration);
+      }
       marks = syncMarks(trail, canvas, config);
       view.setMarks(marks);
     } else {
@@ -139,6 +186,17 @@
       if (mark.contactRequested && mark.reachable === false) unreachable += 1;
     }
     if (unreachable !== unreachableSamples) unreachableSamples = unreachable;
+    if (!physics && lab.preview && lab.summary) {
+      const selected = lab.selected !== null ? lab.summary.cells[lab.selected] : undefined;
+      view.setWorkspace(
+        lab.summary.cells.map((cell) => ({ position: cell.target, kind: cell.kind })),
+        selected
+          ? { target: selected.target, sphere: selected.sphere, clearanceM: selected.footClearanceM }
+          : null,
+      );
+    } else {
+      view.setWorkspace(null, null);
+    }
   });
 
   function selectView(next: CameraView): void {
@@ -160,6 +218,7 @@
     draw: 'Draw',
     track: 'Track Creative Score',
     approach: 'Approach',
+    gesture: 'Aerial gesture',
     hold: 'Hold',
     return: 'Return',
     done: 'Finished',
@@ -184,8 +243,11 @@
           {#if experiment.mode === 'score'}
             The purple line is the creative brush-down path, the turquoise line is brush-up travel, and the pink line is the measured foot. None of these lines is ink. The other creative brush is ignored. The physical drawing leg is FL.
           {/if}
-          {#if experiment.mode === 'brush-approach'}
+          {#if experiment.mode === 'brush-approach' || experiment.mode === 'aerial-gesture'}
             The turquoise marker is the commanded brush tip and the pink marker is the measured tip. A tip below the sheet is a signed distance, not contact.
+            {#if experiment.config.mountProfile === 'candidate-a'}
+              The gray block is the elevated collision platform. Its top is the paper. The brush shaft does not collide.
+            {/if}
           {/if}
           This is not a safe path, and geometric paint is hidden.
         {:else}
@@ -193,34 +255,63 @@
         {/if}
       </p>
       <p class="mono viewport__reach">
-        base z {$physicsRun.snapshot.basePosition[2].toFixed(3)} m · roll {(($physicsRun.snapshot.rollRad * 180) / Math.PI).toFixed(1)}° · pitch {(($physicsRun.snapshot.pitchRad * 180) / Math.PI).toFixed(1)}° · FL clearance {($physicsRun.snapshot.feet.FL.clearanceM * 1000).toFixed(0)} mm · t {$physicsRun.snapshot.time.toFixed(2)} s
+        base z {$physicsRun.snapshot.basePosition[2].toFixed(3)} m · roll {(($physicsRun.snapshot.rollRad * 180) / Math.PI).toFixed(1)}° · pitch {(($physicsRun.snapshot.pitchRad * 180) / Math.PI).toFixed(1)}° · FL clearance {($physicsRun.snapshot.feet.FL.clearanceM * 1000).toFixed(0)} mm · platform contacts {$physicsRun.snapshot.platformContactCount ?? 0} · t {$physicsRun.snapshot.time.toFixed(2)} s
       </p>
     {:else}
       <p class="viewport__note">
-        Geometric preview of paint. A reachable pose is not dynamically safe, and contact is not a physics result.
+        Geometric preview of paint. A position the leg can reach is not a drawing posture, and it is not a physics result.
       </p>
+      {#if $workspaceLab.preview}
+        <p class="viewport__note">
+          Brush-mount preview. The sheet and shaft follow the draft. The score trail still uses the baseline paper and mount. Mesh collision is not evaluated.
+        </p>
+      {/if}
     {/if}
     {#if pose && !physicsLive}
+      {@const fl = pose.legs.FL}
       <p class="mono viewport__reach">
-        FL {pose.legs.FL.reachable === null ? 'held' : pose.legs.FL.reachable ? 'reachable' : 'unreachable'}
-        {#if pose.legs.FL.positionErrorM !== null}
-          · {(pose.legs.FL.positionErrorM * 1000).toFixed(0)} mm
+        FL {fl.reachable === null ? 'held' : fl.reachable ? 'Position reached' : 'Position missed'}
+        {#if fl.positionErrorM !== null}
+          · {(fl.positionErrorM * 1000).toFixed(0)} mm
+        {/if}
+        {#if fl.reachable === true && fl.posture.drawing === 'invalid'}
+          · Drawing posture invalid
+        {:else if fl.reachable === true}
+          · No confirmed posture violation
         {/if}
         <span class="viewport__dot">·</span>
-        FR {pose.legs.FR.reachable === null ? 'held' : pose.legs.FR.reachable ? 'reachable' : 'unreachable'}
+        FR {pose.legs.FR.reachable === null ? 'held' : pose.legs.FR.reachable ? 'Position reached' : 'Position missed'}
         {#if pose.legs.FR.positionErrorM !== null}
           · {(pose.legs.FR.positionErrorM * 1000).toFixed(0)} mm
         {/if}
-        {#if pose.manual}
-          <span class="viewport__dot">·</span> manual
-        {/if}
-        {#if pose.canvasAssumed}
-          <span class="viewport__dot">·</span> canvas 600×600 assumed
-        {/if}
-        {#if pose.legs.FL.onLimit || pose.legs.FR.onLimit}
-          <span class="viewport__dot">·</span> joint limit
-        {/if}
       </p>
+      <p class="mono viewport__reach">
+        {channelLine('FL', fl)}
+        <span class="viewport__dot">·</span>
+        {channelLine('FR', pose.legs.FR)}
+      </p>
+      {#if fl.posture}
+        <p class="mono viewport__reach">
+          Brush axis {((fl.posture.brushAngleRad * 180) / Math.PI).toFixed(0)}° from the paper normal
+          · tolerance {((fl.posture.toleranceRad * 180) / Math.PI).toFixed(0)}°
+          · Joints {fl.posture.joints === 'valid' ? (fl.posture.nearLimit ? 'near a limit' : 'clear') : 'on a limit'}
+          · Floor {(fl.posture.linkClearanceM * 1000).toFixed(0)} mm
+          · {fl.posture.contralateral === 'invalid' ? 'Crosses the midline' : 'Stays on its side'}
+          · Torso primitives {fl.posture.torso}
+          · Mesh collision not evaluated
+          {#if pose.canvasAssumed}
+            · canvas 600×600 assumed
+          {/if}
+          {#if pose.manual}
+            · manual
+          {/if}
+          {#if fl.alternateFound}
+            · posture-aware pose
+          {:else if $simSettings.postureAware}
+            · no alternate pose within 5 mm
+          {/if}
+        </p>
+      {/if}
       {#if unreachableSamples > 0}
         <p class="viewport__note">
           {unreachableSamples} unreachable
@@ -253,6 +344,7 @@
       <button type="button" class="btn btn--small" onclick={() => selectView('perspective')}>Perspective</button>
       <button type="button" class="btn btn--small" onclick={() => selectView('top')}>Top</button>
       <button type="button" class="btn btn--small" onclick={() => selectView('side')}>Side</button>
+      <button type="button" class="btn btn--small" onclick={() => selectView('front')}>Front</button>
     </div>
     <div class="viewport__views" role="group" aria-label="Scene helpers">
       <button
@@ -271,6 +363,27 @@
       >
         Frames
       </button>
+      <button
+        type="button"
+        class="btn btn--small"
+        aria-pressed={$simSettings.postureAware}
+        onclick={() => setPostureAware(!$simSettings.postureAware)}
+      >
+        Posture IK
+      </button>
+      <label class="viewport__tolerance">
+        <span>Axis</span>
+        <input
+          type="number"
+          min="5"
+          max="90"
+          step="1"
+          aria-label="Brush axis tolerance in degrees"
+          value={$simSettings.brushAxisToleranceDeg}
+          onchange={(event) => setBrushAxisTolerance(Number(event.currentTarget.value))}
+        />
+        <span>°</span>
+      </label>
     </div>
     {#if physicsLive}
       <p class="viewport__legend">
@@ -295,6 +408,7 @@
         <span><i class="swatch swatch--desired"></i> Desired</span>
         <span><i class="swatch swatch--achieved"></i> Achieved tip</span>
         <span><i class="swatch swatch--paint"></i> Geometric paint</span>
+        <span><i class="swatch swatch--rejected"></i> Rejected contact</span>
       </p>
     {/if}
   </div>
@@ -386,9 +500,22 @@
   .viewport__views {
     display: flex;
     gap: var(--space-1);
+    align-items: center;
     background: rgba(255, 255, 255, 0.9);
     border-radius: var(--radius);
     padding: 4px;
+  }
+
+  .viewport__tolerance {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text);
+    font-size: 12px;
+  }
+
+  .viewport__tolerance input {
+    width: 52px;
   }
 
   .viewport__legend {
@@ -439,6 +566,10 @@
 
   .swatch--foot {
     background: var(--brand-pink);
+  }
+
+  .swatch--rejected {
+    background: repeating-linear-gradient(90deg, var(--brand-pink) 0 5px, transparent 5px 8px);
   }
 
   .viewport__status {

@@ -41,7 +41,7 @@ export interface PhysicsClient {
   load(): Promise<PhysicsLoad>;
   reset(): Promise<PhysicsStep>;
   step(count: number): Promise<PhysicsSnapshot>;
-  configure(config: ExperimentConfig): Promise<ExperimentView>;
+  configure(config: ExperimentConfig): Promise<PhysicsStep>;
   setMode(mode: PhysicsMode): Promise<ExperimentView>;
   start(): Promise<PhysicsStep>;
   pause(): Promise<PhysicsStep>;
@@ -101,8 +101,8 @@ export function createPhysicsClient(): PhysicsClient {
     async step(count: number): Promise<PhysicsSnapshot> {
       return (await request({ type: 'step', count })).snapshot;
     },
-    async configure(config: ExperimentConfig): Promise<ExperimentView> {
-      return (await request({ type: 'experiment', action: 'configure', config })).experiment;
+    async configure(config: ExperimentConfig): Promise<PhysicsStep> {
+      return stepOf(await request({ type: 'experiment', action: 'configure', config }));
     },
     async setMode(mode: PhysicsMode): Promise<ExperimentView> {
       return (await request({ type: 'experiment', action: 'mode', mode })).experiment;

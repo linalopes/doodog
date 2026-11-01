@@ -3,8 +3,9 @@
  *
  * Desired segments are the canvas request on the paper, including points the
  * leg cannot reach. Paint segments require contact, an active brush, a
- * reachable tip, and geometric proximity to the sheet. A lifted sample never
- * paints. Gaps larger than the preview's paint step are not joined.
+ * reachable tip, geometric proximity to the sheet, and no confirmed posture
+ * violation. A lifted sample never paints. A rejected contact stays visible
+ * as its own path. Gaps larger than the preview's paint step are not joined.
  */
 
 import type { Vec3 } from './math.ts';
@@ -16,12 +17,15 @@ export interface TrailLines {
   desired: Array<[Vec3, Vec3]>;
   achieved: Array<[Vec3, Vec3]>;
   paint: Array<[Vec3, Vec3]>;
+  /** Contact was requested and a confirmed geometric check failed. */
+  rejected: Array<[Vec3, Vec3]>;
 }
 
 export function trailLines(marks: readonly TrailMark[], maxGapSeconds = PAINT_GAP_SECONDS): TrailLines {
   const desired: Array<[Vec3, Vec3]> = [];
   const achieved: Array<[Vec3, Vec3]> = [];
   const paint: Array<[Vec3, Vec3]> = [];
+  const rejected: Array<[Vec3, Vec3]> = [];
   for (const side of ['left', 'right'] as const) {
     const series = marks.filter((mark) => mark.side === side);
     for (let index = 1; index < series.length; index += 1) {
@@ -33,7 +37,8 @@ export function trailLines(marks: readonly TrailMark[], maxGapSeconds = PAINT_GA
       achieved.push([prev.achieved, next.achieved]);
       if (prev.contactRequested && next.contactRequested) desired.push([prev.desired, next.desired]);
       if (prev.paint && next.paint) paint.push([prev.achieved, next.achieved]);
+      if (prev.rejected && next.rejected) rejected.push([prev.achieved, next.achieved]);
     }
   }
-  return { desired, achieved, paint };
+  return { desired, achieved, paint, rejected };
 }

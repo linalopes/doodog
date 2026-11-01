@@ -27,6 +27,7 @@ import type { ScoreBuffer } from './score.ts';
 import type { ExperimentConfig } from './settings.ts';
 import { createPhysicsSession, type PhysicsSession } from './session.ts';
 import { PHYSICS_ASSET_FILES } from './scene.ts';
+import { platformSpec } from './candidate.ts';
 import type { PhysicsModelInfo, PhysicsSnapshot } from './types.ts';
 
 interface LoadMessage {
@@ -70,6 +71,22 @@ type Reply =
 
 let session: PhysicsSession | null = null;
 let memory: ExperimentMemory = createMemory();
+let loaded: { xml: string; assets: Record<string, Uint8Array> } | null = null;
+let platformKey = 'baseline';
+
+function platformKeyOf(config: ExperimentConfig): string {
+  if (config.mountProfile !== 'candidate-a') return 'baseline';
+  return [
+    config.paperOriginX,
+    config.paperOriginY,
+    config.paperOriginZ,
+    config.paperWidthM,
+    config.paperHeightM,
+    config.platformThicknessM,
+  ]
+    .map((value) => value.toFixed(6))
+    .join(',');
+}
 
 onmessage = (event: MessageEvent<Request>) => {
   const message = event.data;
@@ -103,11 +120,27 @@ async function handle(message: Request): Promise<Reply> {
         assets[file] = new Uint8Array(await response.arrayBuffer());
       }),
     );
-    session = await createPhysicsSession({ xml, assets });
+    loaded = { xml, assets };
+    platformKey = 'baseline';
+    session = await createPhysicsSession({ xml, assets, platform: null });
     memory = createMemory();
     return reply(message.id, session.reset(), session.info);
   }
   if (!session) return { id: message.id, ok: false, error: 'Physics is not loaded.' };
+  if (message.type === 'experiment' && message.action === 'configure' && message.config) {
+    const changed = await rebuildPlatform(message.config);
+    const mode = memory.mode;
+    memory = configureMemory(memory, message.config);
+    if (changed && session) {
+      const snapshot = session.reset();
+      memory = createMemory(memory.config);
+      memory.mode = mode;
+      memory.reason =
+        'The MuJoCo model was recompiled so the collision platform matches this configuration. The pose was reset to the home keyframe. go2.xml was not edited. Platform collision is on. The brush tip is not a collision geom.';
+      return reply(message.id, snapshot);
+    }
+    return reply(message.id, session.sample());
+  }
   if (message.type === 'reset') {
     const mode = memory.mode;
     const config = memory.config;
@@ -168,4 +201,18 @@ function reply(id: number, snapshot: PhysicsSnapshot, info?: PhysicsModelInfo): 
 
 function zeros(): number[] {
   return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+async function rebuildPlatform(config: ExperimentConfig): Promise<boolean> {
+  const nextKey = platformKeyOf(config);
+  if (nextKey === platformKey || !loaded || !session) return false;
+  const spec = platformSpec(config);
+  session.dispose();
+  session = await createPhysicsSession({
+    xml: loaded.xml,
+    assets: loaded.assets,
+    platform: spec ? { center: [spec.center[0], spec.center[1], spec.center[2]], half: [spec.half[0], spec.half[1], spec.half[2]] } : null,
+  });
+  platformKey = nextKey;
+  return true;
 }

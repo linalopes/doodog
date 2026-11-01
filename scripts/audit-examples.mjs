@@ -106,6 +106,7 @@ function assertRestingRight(frames, label) {
   for (const entry of frames) {
     const right = entry.frame.right;
     assert.equal(right.contact, false, `${label} right brush drew at t=${entry.t}`);
+    assert.equal(right.active, false, `${label} right brush is participating`);
     assert.equal(right.x, 22, `${label} right brush moved`);
     assert.equal(right.y, CANVAS - 22, `${label} right brush moved`);
   }
